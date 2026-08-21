@@ -1,0 +1,31 @@
+# ===== Credenciales y entorno (PROHIBIDO commitear) =====
+.env
+.env.*
+!.env.example
+
+# ===== Datos originales de la finca (Excel sensibles) =====
+# Regla del spec: los Excel fuente NUNCA entran al repositorio.
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+data/raw/
+data/staging/
+*.csv
+!docs/**/*.csv
+
+# ===== Python / ETL =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== IDE / SO =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
