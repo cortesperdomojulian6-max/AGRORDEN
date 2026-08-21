@@ -153,12 +153,33 @@ def pagina_dias_abiertos(lote: str | None) -> None:
     c1, c2 = st.columns(2)
     c1.metric("Vacas con cálculo", len(dias))
     c2.metric("Promedio días abiertos", f"{dias['dias_abiertos'].mean():.0f}")
+    top = dias.head(20).copy()
+
+    def semaforo(d: int) -> str:
+        if d > UMBRAL_DIAS_ABIERTOS:
+            return f"Crítico (>{UMBRAL_DIAS_ABIERTOS})"
+        if d >= 100:
+            return "Atención (100-150)"
+        return "Normal (<100)"
+
+    top["Estado"] = top["dias_abiertos"].apply(semaforo)
     fig = px.bar(
-        dias.head(20), x="numero_visible", y="dias_abiertos",
-        labels={"numero_visible": "Vaca", "dias_abiertos": "Días abiertos"},
+        top, x="dias_abiertos", y="numero_visible", orientation="h",
+        color="Estado",
+        color_discrete_map={
+            f"Crítico (>{UMBRAL_DIAS_ABIERTOS})": "#c0392b",
+            "Atención (100-150)": "#e67e22",
+            "Normal (<100)": "#27ae60",
+        },
+        category_orders={
+            "Estado": [f"Crítico (>{UMBRAL_DIAS_ABIERTOS})",
+                       "Atención (100-150)", "Normal (<100)"],
+        },
+        labels={"dias_abiertos": "Días abiertos", "numero_visible": "Vaca"},
         title="Las 20 más críticas",
-        color="dias_abiertos", color_continuous_scale="OrRd",
+        height=520,
     )
+    fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
     boton_excel(dias, "dias_abiertos")
     st.dataframe(dias, use_container_width=True, hide_index=True)
