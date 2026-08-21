@@ -202,6 +202,10 @@ def pagina_dias_abiertos(lote: str | None) -> None:
     )
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
+    st.info("💡 **Cómo leer esto:** cada barra es una vaca y su largo son los "
+            f"días que lleva sin quedar preñada. 🔴 Rojo = más de "
+            f"{UMBRAL_DIAS_ABIERTOS} días (revisar pronto) · 🟠 Naranja = entre "
+            "100 y 150 · 🟢 Verde = menos de 100 (va bien).")
     boton_excel(dias, "dias_abiertos")
     st.dataframe(dias, use_container_width=True, hide_index=True)
 
@@ -226,9 +230,31 @@ def pagina_peso(lote: str | None) -> None:
     fig = px.line(
         datos, x="fecha_actual", y="peso_actual", markers=True,
         labels={"fecha_actual": "Fecha", "peso_actual": "Peso (kg)"},
-        title=f"Peso de {animal}",
+        title=f"Peso del animal {animal}",
     )
+    fig.add_annotation(
+        x=ultimo["fecha_actual"], y=ultimo["peso_actual"],
+        text=f"Último pesaje: {ultimo['peso_actual']:.0f} kg",
+        showarrow=True, arrowhead=2, arrowcolor="#27ae60",
+        font=dict(color="#27ae60", size=14),
+    )
+    fig.update_layout(title_font_size=18)
     st.plotly_chart(fig, use_container_width=True)
+    if pd.notna(ultimo["g_dia"]):
+        if ultimo["g_dia"] >= 0:
+            st.info(f"💡 **Cómo leer esto:** cada punto es un pesaje. "
+                    f"El último fue el "
+                    f"{pd.Timestamp(ultimo['fecha_actual']).strftime('%d/%m/%Y')} "
+                    f"con {ultimo['peso_actual']:.0f} kg, y el animal está "
+                    f"**engordando** a razón de {ultimo['g_dia']:.0f} gramos "
+                    "por día.")
+        else:
+            st.warning(f"💡 **Cómo leer esto:** cada punto es un pesaje. "
+                       f"El último fue el "
+                       f"{pd.Timestamp(ultimo['fecha_actual']).strftime('%d/%m/%Y')} "
+                       f"con {ultimo['peso_actual']:.0f} kg, pero el animal está "
+                       f"**bajando de peso** ({abs(ultimo['g_dia']):.0f} gramos "
+                       "por día menos). Revise su alimentación o salud.")
     with st.expander("Tabla de ganancias entre pesajes"):
         st.dataframe(datos, use_container_width=True, hide_index=True)
         boton_excel(datos, f"ganancias_peso_{animal}")
@@ -256,11 +282,15 @@ def pagina_produccion(lote: str | None) -> None:
         datos_comp = prod[prod["numero_visible"].isin(comparar)]
         fig_comp = px.line(
             datos_comp, x="fecha_real", y="litros", color="numero_visible",
-            labels={"fecha_real": "Fecha real", "litros": "Litros",
+            labels={"fecha_real": "Fecha", "litros": "Litros de leche al día",
                     "numero_visible": "Vaca"},
-            title="Curvas superpuestas",
+            title="Comparación de vacas",
         )
+        fig_comp.update_layout(title_font_size=18)
         st.plotly_chart(fig_comp, use_container_width=True)
+        st.caption("Cada color es una vaca. Si la línea de una vaca queda muy "
+                   "por debajo de las demás todo el tiempo, esa vaca produce "
+                   "menos y vale la pena revisarla.")
     elif comparar:
         st.caption("Selecciona al menos una vaca más para comparar.")
 
@@ -273,11 +303,34 @@ def pagina_produccion(lote: str | None) -> None:
                   help=f"El {pd.Timestamp(fila_pico.iloc[0]['fecha_pico']).strftime('%d/%m/%Y')}")
     fig = px.line(
         datos, x="fecha_real", y="litros", markers=True,
-        labels={"fecha_real": "Fecha real (parto + mes + día)", "litros": "Litros"},
-        title=f"Producción diaria de {animal}",
+        labels={"fecha_real": "Fecha", "litros": "Litros de leche al día"},
+        title=f"Leche diaria de la vaca {animal}",
     )
+    promedio = datos["litros"].mean()
+    fig.add_hline(
+        y=promedio, line_dash="dash", line_color="gray",
+        annotation_text=f"Su promedio: {promedio:.1f} L",
+        annotation_position="top left",
+    )
+    if not fila_pico.empty:
+        p = fila_pico.iloc[0]
+        fig.add_annotation(
+            x=p["fecha_pico"], y=p["litros_pico"],
+            text=f"⭐ Su mejor día: {p['litros_pico']:.0f} L",
+            showarrow=True, arrowhead=2, arrowcolor="#c0392b",
+            font=dict(color="#c0392b", size=14),
+        )
+    fig.update_layout(title_font_size=18)
     st.plotly_chart(fig, use_container_width=True)
     boton_excel(datos, f"produccion_{animal}")
+    if not fila_pico.empty:
+        p = fila_pico.iloc[0]
+        st.info(
+            f"💡 **Cómo leer esto:** cada punto es un día de ordeño. "
+            f"La línea punteada es su promedio ({promedio:.1f} L). "
+            f"El punto marcado con ⭐ es su mejor día "
+            f"({pd.Timestamp(p['fecha_pico']).strftime('%d/%m/%Y')} con "
+            f"{p['litros_pico']:.0f} litros).")
 
 
 PAGINAS = {
