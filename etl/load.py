@@ -5,7 +5,15 @@ from __future__ import annotations
 import psycopg2
 import psycopg2.extras
 
-from etl.transform import AnimalRecord, EventoRecord, HitoRecord, QuarantineRow
+from etl.transform import (
+    AnimalRecord,
+    EventoRecord,
+    EventoReproRecord,
+    HitoRecord,
+    PesajeRecord,
+    ProduccionRecord,
+    QuarantineRow,
+)
 
 SEXO_PROVISIONAL = "F"
 
@@ -18,14 +26,16 @@ def reset_operational_tables(conn) -> None:
         )
 
 
-def load_catalogs(conn) -> tuple[dict[str, str], dict[str, str]]:
-    """Devuelve {nombre: uuid} de lotes y tipos de evento."""
+def load_catalogs(conn) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Devuelve {nombre: uuid} de lotes, tipos de evento y eventos reproductivos."""
     with conn.cursor() as cur:
         cur.execute("SELECT nombre_lote, id_lote::text FROM lotes")
         lotes = dict(cur.fetchall())
         cur.execute("SELECT nombre_tipo, id_tipo_evento::text FROM cat_tipos_evento")
         tipos = dict(cur.fetchall())
-    return lotes, tipos
+        cur.execute("SELECT nombre_tipo, id_tipo_evento::text FROM cat_eventos_reproductivos")
+        tipos_repro = dict(cur.fetchall())
+    return lotes, tipos, tipos_repro
 
 
 def load_animales(conn, registry: dict[str, AnimalRecord]) -> dict[str, str]:
@@ -124,4 +134,67 @@ def load_cuarentena(conn, rows: list[QuarantineRow]) -> int:
             """,
             data,
         )
+    return len(rows)
+
+
+def load_pesajes(conn, pesajes: list[PesajeRecord], ids: dict[str, str]) -> int:
+    rows = [
+        (ids[p.numero_visible], p.fecha, p.peso_kg, p.archivo_origen, p.hoja_origen)
+        for p in pesajes
+        if p.numero_visible in ids
+    ]
+    if rows:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO pesajes (id_animal, fecha, peso_kg, archivo_origen, hoja_origen) VALUES %s",
+                rows,
+            )
+    return len(rows)
+
+
+def load_produccion(conn, registros: list[ProduccionRecord], ids: dict[str, str]) -> int:
+    rows = [
+        (ids[r.numero_visible], r.orden_mes, r.mes, r.dia, r.litros,
+         r.archivo_origen, r.hoja_origen)
+        for r in registros
+        if r.numero_visible in ids
+    ]
+    if rows:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO produccion_lechera
+                    (id_animal, orden_mes, mes, dia, litros, archivo_origen, hoja_origen)
+                VALUES %s
+                """,
+                rows,
+            )
+    return len(rows)
+
+
+def load_eventos_reproductivos(
+    conn,
+    eventos: list[EventoReproRecord],
+    ids: dict[str, str],
+    tipos_repro: dict[str, str],
+) -> int:
+    rows = [
+        (ids[e.numero_visible], tipos_repro[e.tipo_evento], e.fecha_evento,
+         e.archivo_origen, e.hoja_origen)
+        for e in eventos
+        if e.numero_visible in ids and e.tipo_evento in tipos_repro
+    ]
+    if rows:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO eventos_reproductivos
+                    (id_animal, id_tipo_evento, fecha_evento, archivo_origen, hoja_origen)
+                VALUES %s
+                """,
+                rows,
+            )
     return len(rows)
