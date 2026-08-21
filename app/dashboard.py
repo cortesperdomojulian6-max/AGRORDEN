@@ -7,6 +7,7 @@ Principios: solo lectura; conexión por .env; las vistas de SPEC-004 son la API.
 """
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -66,6 +67,17 @@ def filtrar_por_lote(df: pd.DataFrame, lote: str | None) -> pd.DataFrame:
     return df[df["nombre_lote"].fillna("(sin lote)") == lote_df]
 
 
+def boton_excel(df: pd.DataFrame, nombre: str) -> None:
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False)
+    st.download_button(
+        f"📥 Descargar {nombre} (Excel)",
+        buf.getvalue(),
+        file_name=f"{nombre}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 def barra_lateral() -> tuple[str, str | None]:
     with st.sidebar:
         st.title("🐄 AGRORDEN")
@@ -107,6 +119,7 @@ def alertas(lote: str | None) -> None:
                           "dias_abiertos"]],
                 use_container_width=True, hide_index=True,
             )
+            boton_excel(criticas, "vacas_criticas_dias_abiertos")
     if not bajando.empty:
         with st.expander(f"📉 Animales perdiendo peso ({len(bajando)})"):
             st.dataframe(
@@ -114,6 +127,7 @@ def alertas(lote: str | None) -> None:
                          "peso_actual", "g_dia"]],
                 use_container_width=True, hide_index=True,
             )
+            boton_excel(bajando, "animales_perdiendo_peso")
 
 
 def pagina_resumen(lote: str | None) -> None:
@@ -146,6 +160,7 @@ def pagina_dias_abiertos(lote: str | None) -> None:
         color="dias_abiertos", color_continuous_scale="OrRd",
     )
     st.plotly_chart(fig, use_container_width=True)
+    boton_excel(dias, "dias_abiertos")
     st.dataframe(dias, use_container_width=True, hide_index=True)
 
 
@@ -172,6 +187,7 @@ def pagina_peso(lote: str | None) -> None:
     st.plotly_chart(fig, use_container_width=True)
     with st.expander("Tabla de ganancias entre pesajes"):
         st.dataframe(datos, use_container_width=True, hide_index=True)
+        boton_excel(datos, f"ganancias_peso_{animal}")
 
 
 def pagina_produccion(lote: str | None) -> None:
@@ -183,6 +199,25 @@ def pagina_produccion(lote: str | None) -> None:
         st.info("Sin producción para este filtro.")
         return
     animal = st.selectbox("Animal", opciones)
+
+    st.subheader("🔍 Comparación entre vacas")
+    comparar = st.multiselect(
+        "Selecciona 2 o más vacas para superponer sus curvas",
+        opciones,
+        help="Detecta a simple vista curvas atípicas.",
+    )
+    if len(comparar) >= 2:
+        datos_comp = prod[prod["numero_visible"].isin(comparar)]
+        fig_comp = px.line(
+            datos_comp, x="fecha_real", y="litros", color="numero_visible",
+            labels={"fecha_real": "Fecha real", "litros": "Litros",
+                    "numero_visible": "Vaca"},
+            title="Curvas superpuestas",
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+    elif comparar:
+        st.caption("Selecciona al menos una vaca más para comparar.")
+
     datos = prod[prod["numero_visible"] == animal]
     fila_pico = pico[pico["numero_visible"] == animal]
     c1, c2 = st.columns(2)
@@ -196,6 +231,7 @@ def pagina_produccion(lote: str | None) -> None:
         title=f"Producción diaria de {animal}",
     )
     st.plotly_chart(fig, use_container_width=True)
+    boton_excel(datos, f"produccion_{animal}")
 
 
 PAGINAS = {

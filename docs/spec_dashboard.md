@@ -47,3 +47,17 @@
 - **CA-05:** la navegación cambia de sección sin errores.
 - **CA-06:** al filtrar por un lote, las tablas solo muestran animales de ese lote.
 - **CA-07:** la vaca 9030 (227 días abiertos) aparece en la lista de alertas críticas.
+
+## 5. Fase 3 — Herramientas para la revisión de Robin
+
+- **RF-11:** botón de descarga a Excel en las tablas clave (días abiertos,
+  alertas críticas, ganancias de peso, producción del animal). Robin anota
+  sobre estos archivos y devuelve correcciones.
+- **RF-12:** en Producción, selección múltiple de vacas para superponer sus
+  curvas de lactancia y detectar anomalías visualmente.
+
+### Criterios de aceptación fase 3
+
+- **CA-08:** cada botón de descarga genera un .xlsx con las filas visibles.
+- **CA-09:** al seleccionar 2+ vacas en Comparación, la gráfica muestra una
+  línea por vaca con leyenda.
