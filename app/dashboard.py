@@ -90,14 +90,13 @@ def barra_lateral() -> tuple[str, str | None]:
         lotes = leer_vista(V_HATO)["lote"].tolist()
         lote = st.selectbox("Filtrar por lote", ["Todos"] + lotes)
         st.divider()
-        st.caption("Datos vivos de PostgreSQL. Los indicadores se recalculan en cada consulta.")
+        st.caption("El estado de su finca de un vistazo, calculado con los "
+                   "registros que usted ya anota.")
     return seccion, None if lote == "Todos" else lote
 
 
 def alertas(lote: str | None) -> None:
-    st.subheader("🚨 Alertas del hato")
-    st.caption(f"Umbrales provisionales: >{UMBRAL_DIAS_ABIERTOS} días abiertos "
-               "(pendiente validar con Robin).")
+    st.subheader("🚨 A qué le debe prestar atención")
     dias = filtrar_por_lote(leer_vista(V_DIAS), lote)
     peso = leer_vista(V_PESO)
     peso_reciente = peso.sort_values("fecha_actual").groupby(
@@ -107,13 +106,31 @@ def alertas(lote: str | None) -> None:
     sin_cubrir = dias[dias["fecha_cubricion"].isna()]
     bajando = peso_reciente[peso_reciente["g_dia"] < 0]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"Vacas > {UMBRAL_DIAS_ABIERTOS} días abiertas", len(criticas))
-    c2.metric("Sin cubrición tras parto", len(sin_cubrir))
-    c3.metric("Perdiendo peso", len(bajando))
+    mensajes = []
+    if not criticas.empty:
+        lista = ", ".join(criticas["numero_visible"].head(6))
+        mas = f" y otras {len(criticas) - 6}" if len(criticas) > 6 else ""
+        mensajes.append(
+            f"🔴 **{len(criticas)} vacas llevan más de {UMBRAL_DIAS_ABIERTOS} días "
+            f"sin quedar preñadas** después de su parto ({lista}{mas}). "
+            "Conviene revisarlas con el veterinario.")
+    if not sin_cubrir.empty:
+        mensajes.append(
+            f"🟠 **{len(sin_cubrir)} vacas parieron y no se les ha registrado "
+            "monta ni inseminación.** Si ya se sirvieron, falta anotarlo.")
+    if not bajando.empty:
+        lista = ", ".join(bajando["numero_visible"].head(6))
+        mensajes.append(
+            f"📉 **{len(bajando)} animales están bajando de peso** según sus "
+            f"últimos pesajes ({lista}). Vale la pena revisar su alimentación "
+            "o salud.")
+    if not mensajes:
+        st.success("✅ Todo en orden: no hay alertas para este filtro.")
+    for m in mensajes:
+        st.markdown(m)
 
     if not criticas.empty:
-        with st.expander(f"⚠️ Vacas críticas por días abiertos ({len(criticas)})"):
+        with st.expander(f"Ver tabla de las {len(criticas)} vacas críticas"):
             st.dataframe(
                 criticas[["numero_visible", "nombre_lote", "fecha_parto",
                           "dias_abiertos"]],
@@ -121,7 +138,7 @@ def alertas(lote: str | None) -> None:
             )
             boton_excel(criticas, "vacas_criticas_dias_abiertos")
     if not bajando.empty:
-        with st.expander(f"📉 Animales perdiendo peso ({len(bajando)})"):
+        with st.expander(f"Ver tabla de los {len(bajando)} animales bajando de peso"):
             st.dataframe(
                 bajando[["numero_visible", "nombre_lote", "fecha_actual",
                          "peso_actual", "g_dia"]],
@@ -132,6 +149,7 @@ def alertas(lote: str | None) -> None:
 
 def pagina_resumen(lote: str | None) -> None:
     st.header("📋 Resumen del hato")
+    st.caption("Cuántos animales hay en cada lote de la finca.")
     hato = leer_vista(V_HATO)
     if lote:
         hato = hato[hato["lote"] == lote]
@@ -146,6 +164,9 @@ def pagina_resumen(lote: str | None) -> None:
 
 def pagina_dias_abiertos(lote: str | None) -> None:
     st.header("⏱️ Días abiertos")
+    st.caption("Los **días abiertos** son los días que lleva una vaca sin quedar "
+               "preñada desde su último parto. Entre menos días, mejor: lo ideal "
+               "es que quede preñada pronto después de parir.")
     dias = filtrar_por_lote(leer_vista(V_DIAS), lote)
     if dias.empty:
         st.info("Sin datos para este filtro.")
@@ -187,6 +208,8 @@ def pagina_dias_abiertos(lote: str | None) -> None:
 
 def pagina_peso(lote: str | None) -> None:
     st.header("⚖️ Evolución de peso")
+    st.caption("Cuánto pesa cada animal y si está engordando o adelgazando "
+               "entre un pesaje y otro. La ganancia se mide en **gramos por día**.")
     todo = leer_vista(V_PESO)
     opciones = sorted(set(filtrar_por_lote(todo, lote)["numero_visible"]))
     if not opciones:
@@ -213,6 +236,8 @@ def pagina_peso(lote: str | None) -> None:
 
 def pagina_produccion(lote: str | None) -> None:
     st.header("🥛 Curva de lactancia")
+    st.caption("Litros de leche por día. La curva normal sube después del parto, "
+               "llega a un **pico** y luego baja poco a poco hasta el secado.")
     prod = leer_vista(V_PROD)
     pico = leer_vista(V_PICO)
     opciones = sorted(set(filtrar_por_lote(prod, lote)["numero_visible"]))
