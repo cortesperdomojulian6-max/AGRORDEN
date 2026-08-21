@@ -109,7 +109,7 @@ CREATE INDEX IF NOT EXISTS idx_eventos_repro_animal_fecha
 -- ----------------------------------------------------------------------------
 -- Permisos: el ETL opera como agrorden_app
 -- ----------------------------------------------------------------------------
-GRANT SELECT, INSERT, TRUNCATE
+GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE
     ON pesajes, produccion_lechera, eventos_reproductivos
     TO agrorden_app;
 
