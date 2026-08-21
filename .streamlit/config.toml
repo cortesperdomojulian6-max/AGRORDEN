@@ -1,0 +1,8 @@
+# Configuración de Streamlit para AGRORDEN
+# toolbarMode=minimal oculta el botón "Deploy" y el menú de Streamlit:
+# esta app es local y privada; no se ofrece publicación externa.
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true

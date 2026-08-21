@@ -39,10 +39,12 @@ SELECT
         WHEN u.fecha_cubricion > p.fecha_parto
             THEN u.fecha_cubricion - p.fecha_parto
         ELSE CURRENT_DATE - p.fecha_parto
-    END AS dias_abiertos
+    END AS dias_abiertos,
+    l.nombre_lote
 FROM animales a
 LEFT JOIN ultimo_parto p ON p.id_animal = a.id_interno
-LEFT JOIN ultima_cubricion u ON u.id_animal = a.id_interno;
+LEFT JOIN ultima_cubricion u ON u.id_animal = a.id_interno
+LEFT JOIN lotes l ON l.id_lote = a.id_lote_actual;
 
 -- ----------------------------------------------------------------------------
 -- RF-02 · Ganancia de peso entre pesajes consecutivos (g/día)
@@ -58,7 +60,8 @@ SELECT
     (p1.fecha - p2.fecha) AS dias,
     ROUND(
         (p1.peso_kg - p2.peso_kg) / NULLIF(p1.fecha - p2.fecha, 0) * 1000
-    ) AS g_dia
+    ) AS g_dia,
+    l.nombre_lote
 FROM pesajes p1
 JOIN pesajes p2
     ON p2.id_animal = p1.id_animal
@@ -70,6 +73,7 @@ JOIN pesajes p2
          AND NOT p3.provisional
    )
 JOIN animales a ON a.id_interno = p1.id_animal
+LEFT JOIN lotes l ON l.id_lote = a.id_lote_actual
 WHERE NOT p1.provisional;
 
 -- ----------------------------------------------------------------------------
@@ -102,14 +106,17 @@ WITH base AS (
 )
 SELECT
     id_registro,
-    id_animal,
-    numero_visible,
+    base.id_animal,
+    a.numero_visible,
     orden_mes,
     dia,
     litros,
     fecha_parto,
-    (mes_objetivo + (dia - 1))::date AS fecha_real
+    (mes_objetivo + (dia - 1))::date AS fecha_real,
+    l.nombre_lote
 FROM base
+JOIN animales a ON a.id_interno = base.id_animal
+LEFT JOIN lotes l ON l.id_lote = a.id_lote_actual
 WHERE dia <= EXTRACT(
     DAY FROM (date_trunc('month', mes_objetivo)
               + interval '1 month - 1 day')
@@ -123,7 +130,8 @@ SELECT DISTINCT ON (id_animal)
     id_animal,
     numero_visible,
     fecha_real AS fecha_pico,
-    litros AS litros_pico
+    litros AS litros_pico,
+    nombre_lote
 FROM v_produccion_con_fecha
 ORDER BY id_animal, litros DESC, fecha_real ASC;
 
