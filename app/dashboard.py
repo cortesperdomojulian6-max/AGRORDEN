@@ -107,6 +107,12 @@ def alertas(lote: str | None) -> None:
     bajando = peso_reciente[peso_reciente["g_dia"] < 0]
 
     mensajes = []
+    if not bajando.empty:
+        lista = ", ".join(bajando["numero_visible"].head(6))
+        mensajes.append(
+            f"📉 **{len(bajando)} animales están bajando de peso** según sus "
+            f"últimos pesajes ({lista}). Vale la pena revisar su alimentación "
+            "o salud.")
     if not criticas.empty:
         lista = ", ".join(criticas["numero_visible"].head(6))
         mas = f" y otras {len(criticas) - 6}" if len(criticas) > 6 else ""
@@ -118,12 +124,6 @@ def alertas(lote: str | None) -> None:
         mensajes.append(
             f"🟠 **{len(sin_cubrir)} vacas parieron y no se les ha registrado "
             "monta ni inseminación.** Si ya se sirvieron, falta anotarlo.")
-    if not bajando.empty:
-        lista = ", ".join(bajando["numero_visible"].head(6))
-        mensajes.append(
-            f"📉 **{len(bajando)} animales están bajando de peso** según sus "
-            f"últimos pesajes ({lista}). Vale la pena revisar su alimentación "
-            "o salud.")
     if not mensajes:
         st.success("✅ Todo en orden: no hay alertas para este filtro.")
     for m in mensajes:
@@ -172,42 +172,43 @@ def pagina_dias_abiertos(lote: str | None) -> None:
         st.info("Sin datos para este filtro.")
         return
     c1, c2 = st.columns(2)
-    c1.metric("Vacas con cálculo", len(dias))
-    c2.metric("Promedio días abiertos", f"{dias['dias_abiertos'].mean():.0f}")
-    top = dias.head(20).copy()
+    c1.metric("Promedio de días sin preñar", f"{dias['dias_abiertos'].mean():.0f}")
+    c2.metric("Vacas evaluadas", len(dias))
 
-    def semaforo(d: int) -> str:
+    criticas = dias[dias["dias_abiertos"] > UMBRAL_DIAS_ABIERTOS]
+    atencion = dias[(dias["dias_abiertos"] >= 100)
+                    & (dias["dias_abiertos"] <= UMBRAL_DIAS_ABIERTOS)]
+    bien = dias[dias["dias_abiertos"] < 100]
+
+    c1, c2, c3 = st.columns(3)
+    c1.error(f"### 🔴 {len(criticas)}\nPor revisar\n(más de "
+             f"{UMBRAL_DIAS_ABIERTOS} días)")
+    c2.warning(f"### 🟠 {len(atencion)}\nEn atención\n(entre 100 y "
+               f"{UMBRAL_DIAS_ABIERTOS} días)")
+    c3.success(f"### 🟢 {len(bien)}\nVan bien\n(menos de 100 días)")
+
+    def estado(d: int) -> str:
         if d > UMBRAL_DIAS_ABIERTOS:
-            return f"Crítico (>{UMBRAL_DIAS_ABIERTOS})"
+            return "🔴 Por revisar"
         if d >= 100:
-            return "Atención (100-150)"
-        return "Normal (<100)"
+            return "🟠 Atención"
+        return "🟢 Va bien"
 
-    top["Estado"] = top["dias_abiertos"].apply(semaforo)
-    fig = px.bar(
-        top, x="dias_abiertos", y="numero_visible", orientation="h",
-        color="Estado",
-        color_discrete_map={
-            f"Crítico (>{UMBRAL_DIAS_ABIERTOS})": "#c0392b",
-            "Atención (100-150)": "#e67e22",
-            "Normal (<100)": "#27ae60",
-        },
-        category_orders={
-            "Estado": [f"Crítico (>{UMBRAL_DIAS_ABIERTOS})",
-                       "Atención (100-150)", "Normal (<100)"],
-        },
-        labels={"dias_abiertos": "Días abiertos", "numero_visible": "Vaca"},
-        title="Las 20 más críticas",
-        height=520,
+    tabla = dias.copy()
+    tabla["Estado"] = tabla["dias_abiertos"].apply(estado)
+    tabla = tabla.rename(columns={
+        "numero_visible": "Vaca",
+        "nombre_lote": "Lote",
+        "fecha_parto": "Último parto",
+        "fecha_cubricion": "Última monta o servicio",
+        "dias_abiertos": "Días sin preñar",
+    })
+    st.dataframe(
+        tabla[["Vaca", "Lote", "Último parto", "Última monta o servicio",
+               "Días sin preñar", "Estado"]],
+        use_container_width=True, hide_index=True,
     )
-    fig.update_yaxes(autorange="reversed")
-    st.plotly_chart(fig, use_container_width=True)
-    st.info("💡 **Cómo leer esto:** cada barra es una vaca y su largo son los "
-            f"días que lleva sin quedar preñada. 🔴 Rojo = más de "
-            f"{UMBRAL_DIAS_ABIERTOS} días (revisar pronto) · 🟠 Naranja = entre "
-            "100 y 150 · 🟢 Verde = menos de 100 (va bien).")
-    boton_excel(dias, "dias_abiertos")
-    st.dataframe(dias, use_container_width=True, hide_index=True)
+    boton_excel(tabla, "dias_abiertos")
 
 
 def pagina_peso(lote: str | None) -> None:
