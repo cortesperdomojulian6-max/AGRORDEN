@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from etl.extract import LOTE_BY_LETTER
+from etl.extract import LOTE_BY_LETTER, MESES_ES, normalize_label
 
 SENTINEL_DATE: pd.Timestamp = pd.Timestamp(1900, 1, 1)
 CONDITION_RANGE: tuple[float, float] = (1.0, 5.0)
@@ -50,8 +50,15 @@ def strip_accents(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
 
 
+RE_ISO_DATE = re.compile(r"^\s*\d{4}-\d{1,2}-\d{1,2}")
+
+
 def clean_date(value) -> date | None:
-    """R1: convierte fechas; el centinela 1900-01-01 (fecha o texto) es NULL."""
+    """R1: convierte fechas; el centinela 1900-01-01 (fecha o texto) es NULL.
+
+    Formato ISO (YYYY-MM-DD) se parsea sin dayfirst: forzarlo invierte
+    día/mes (bug de corrupción detectado por pruebas SPEC-002).
+    """
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     if isinstance(value, (datetime, pd.Timestamp)):
@@ -59,7 +66,9 @@ def clean_date(value) -> date | None:
     text = str(value).strip()
     if not text or "1900" in text:
         return None
-    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+    parsed = pd.to_datetime(
+        value, errors="coerce", dayfirst=not RE_ISO_DATE.match(text)
+    )
     if pd.isna(parsed):
         return None
     return None if parsed == SENTINEL_DATE else parsed.date()
@@ -122,6 +131,59 @@ class EventoRecord:
     producto_aplicado: str | None
     observaciones_clinicas: str | None
     condicion_corporal: float | None
+
+
+@dataclass
+class PesajeRecord:
+    """Pesaje de báscula (SPEC-002 D1): solo lo medido."""
+
+    numero_visible: str
+    fecha: date
+    peso_kg: float
+    archivo_origen: str
+    hoja_origen: str
+
+
+@dataclass
+class ProduccionRecord:
+    """Registro de ordeño fiel a CURVA (SPEC-002 D2): mes + día + litros.
+
+    El año no se almacena: se deduce al consultar desde la fecha de parto.
+    """
+
+    numero_visible: str
+    orden_mes: int
+    mes: int
+    dia: int
+    litros: float
+    archivo_origen: str
+    hoja_origen: str
+
+
+@dataclass
+class EventoReproRecord:
+    """Evento reproductivo fechado (SPEC-002 D6)."""
+
+    numero_visible: str
+    fecha_evento: date
+    tipo_evento: str
+    archivo_origen: str
+    hoja_origen: str
+
+
+# Mapeo etiquetas CURVA -> catálogo cerrado (D5/D6 validados por Robin).
+# 'Monta' = natural por toro; 'Servicio' = inseminación artificial.
+# Orden importa: las etiquetas más específicas van primero porque el
+# emparejamiento es por subcadena ('CELO POSPARTO' contiene a 'PARTO').
+REPRO_LABEL_MAP: tuple[tuple[str, str], ...] = (
+    ("FECHA DE SERVICIO", "Servicio"),
+    ("CELO POSPARTO", "Celo Posparto"),
+    ("DIAGNOSTICO", "Diagnóstico de Preñez"),
+    ("PRENEZ", "Diagnóstico de Preñez"),
+    ("SECADO", "Secado"),
+    ("MONTA", "Monta"),
+    ("PARTO", "Parto"),
+)
 
 
 @dataclass
@@ -257,3 +319,134 @@ def transform_fichas_sheet(
                         archivo, hoja, int(idx), "OTRO",
                         "Registro de pesaje sin tabla destino en spec v1",
                         {"peso": peso_match.group(1), "observaciones": obs}))
+
+
+# ---------------------------------------------------------------------------
+# SPEC-002: pesajes, producción CURVA y eventos reproductivos
+# ---------------------------------------------------------------------------
+
+def parse_pesajes_sheet(
+    df: pd.DataFrame,
+    numero_visible: str,
+    archivo: str,
+    hoja: str,
+) -> tuple[list[PesajeRecord], list[QuarantineRow]]:
+    """RF-02: extrae (fecha, peso) de una hoja de PESAJE GENERAL.
+
+    Solo persiste lo medido (D1). Fecha inválida/centinela -> R1;
+    peso no numérico o <= 0 -> R3; fila vacía se omite sin ruido.
+    """
+    registros: list[PesajeRecord] = []
+    cuarentena: list[QuarantineRow] = []
+    cols = {strip_accents(str(c)).strip().upper(): c for c in df.columns if isinstance(c, str)}
+    c_fecha = next((cols[k] for k in cols if "FECHA" in k), None)
+    c_peso = next((cols[k] for k in cols if "PESO" in k), None)
+    if c_fecha is None or c_peso is None:
+        cuarentena.append(QuarantineRow(
+            archivo, hoja, None, "OTRO",
+            "Hoja de pesaje sin columnas FECHA/PESO reconocibles"))
+        return registros, cuarentena
+
+    for idx, row in df.iterrows():
+        raw_fecha, raw_peso = row[c_fecha], row[c_peso]
+        if pd.isna(raw_fecha) and pd.isna(raw_peso):
+            continue
+        fecha = clean_date(raw_fecha)
+        if fecha is None:
+            cuarentena.append(QuarantineRow(
+                archivo, hoja, int(idx), "R1",
+                "Pesaje con fecha inválida o centinela 1900",
+                {"peso": str(raw_peso)}))
+            continue
+        peso = pd.to_numeric(raw_peso, errors="coerce")
+        if pd.isna(peso) or peso <= 0:
+            cuarentena.append(QuarantineRow(
+                archivo, hoja, int(idx), "R3",
+                f"Peso imposible o no numérico ({raw_peso})",
+                {"fecha": str(fecha)}))
+            continue
+        registros.append(PesajeRecord(numero_visible, fecha, float(peso), archivo, hoja))
+    return registros, cuarentena
+
+
+def parse_repro_events(
+    meta: dict,
+    numero_visible: str,
+    archivo: str,
+    hoja: str,
+) -> tuple[list[EventoReproRecord], list[QuarantineRow]]:
+    """RF-04: convierte las etiquetas reproductivas de CURVA en eventos fechados.
+
+    Centinela exacto 1900-01-01 = ausencia legítima del evento -> omisión
+    silenciosa. Cualquier otra fecha del año 1900 (ej. SECADO=1900-08-11,
+    spec §4.2) es dato corrupto -> cuarentena R1.
+    """
+    eventos: list[EventoReproRecord] = []
+    cuarentena: list[QuarantineRow] = []
+    for label, value in meta.items():
+        label_norm = normalize_label(label)
+        tipo = next((t for key, t in REPRO_LABEL_MAP if key in label_norm), None)
+        if tipo is None:
+            continue
+        if isinstance(value, (datetime, pd.Timestamp)):
+            parsed = clean_date(value)
+        elif isinstance(value, str):
+            parsed = clean_date(value)
+        else:
+            continue
+        if parsed is None:
+            continue
+        if parsed.year == 1900:
+            cuarentena.append(QuarantineRow(
+                archivo, hoja, None, "R1",
+                f"{tipo}: fecha con año centinela 1900 ({value})",
+                {"etiqueta": label}))
+            continue
+        eventos.append(EventoReproRecord(numero_visible, parsed, tipo, archivo, hoja))
+    return eventos, cuarentena
+
+
+def parse_produccion_curva(
+    grid: pd.DataFrame,
+    bloques: list[tuple[str, int, int]],
+    numero_visible: str,
+    archivo: str,
+    hoja: str,
+) -> tuple[list[ProduccionRecord], list[QuarantineRow]]:
+    """RF-03: desapivota los bloques mensuales Días/Litros de una hoja CURVA.
+
+    Celda vacía de litros = ausencia de medición -> omisión silenciosa.
+    Día inválido o litros negativos -> R3. Mes desconocido -> OTRO.
+    """
+    registros: list[ProduccionRecord] = []
+    cuarentena: list[QuarantineRow] = []
+    for orden, (nombre, c_dia, c_litro) in enumerate(bloques):
+        mes = MESES_ES.get(nombre)
+        if mes is None:
+            cuarentena.append(QuarantineRow(
+                archivo, hoja, None, "OTRO",
+                f"Bloque mensual desconocido '{nombre}'"))
+            continue
+        for idx, row in grid.iterrows():
+            if c_litro >= len(row):
+                continue
+            litros = pd.to_numeric(row[c_litro], errors="coerce")
+            if pd.isna(litros):
+                continue
+            dia_raw = row[c_dia] if c_dia < len(row) else None
+            dia = pd.to_numeric(dia_raw, errors="coerce")
+            if pd.isna(dia) or not (1 <= dia <= 31) or float(dia) != int(dia):
+                cuarentena.append(QuarantineRow(
+                    archivo, hoja, int(idx), "R3",
+                    f"Día inválido en bloque {nombre} ({dia_raw})",
+                    {"litros": float(litros)}))
+                continue
+            if litros < 0:
+                cuarentena.append(QuarantineRow(
+                    archivo, hoja, int(idx), "R3",
+                    f"Litros negativos en bloque {nombre} ({litros})",
+                    {"dia": int(dia)}))
+                continue
+            registros.append(ProduccionRecord(
+                numero_visible, orden, mes, int(dia), float(litros), archivo, hoja))
+    return registros, cuarentena

@@ -8,6 +8,7 @@ Estructuras descubiertas en el perfilado (docs/profiling_report_2026-08-20.md):
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,21 @@ LOTE_BY_LETTER: dict[str, str] = {
     "M": "Mamon",
     "S": "Silvo",
 }
+
+# Nombres de mes en las hojas CURVA -> número (spec SPEC-002 §4.1).
+MESES_ES: dict[str, int] = {
+    "ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4,
+    "MAYO": 5, "JUNIO": 6, "JULIO": 7, "AGOSTO": 8,
+    "SEPTIEMBRE": 9, "OCTUBRE": 10, "NOVIEMBRE": 11, "DICIEMBRE": 12,
+}
+
+
+def normalize_label(value) -> str:
+    """Texto a mayúsculas sin acentos para comparar etiquetas de hoja."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = str(value).strip().upper()
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
 
 
 @dataclass(frozen=True)
@@ -92,3 +108,30 @@ def load_sheet(path: Path, sheet: str) -> pd.DataFrame:
     raw_head = pd.read_excel(path, sheet_name=sheet, header=None, nrows=HEADER_SCAN_ROWS)
     header_row = detect_header_row(raw_head)
     return pd.read_excel(path, sheet_name=sheet, header=header_row if header_row is not None else 0)
+
+
+def load_curva_grid(path: Path, sheet: str) -> dict:
+    """Lee una hoja CURVA cruda (sin encabezado) según spec SPEC-002 §4.1.
+
+    Estructura verificada (hoja 12954):
+        filas 3-4 : etiquetas y fechas reproductivas en columnas A/B
+        fila 6    : nombres de mes; cada mes abarca su propia columna de
+                    'Días' y la columna siguiente de 'Litros'
+
+    Devuelve:
+        meta  : {ETIQUETA_NORMALIZADA: valor} (fechas reproductivas, ID...)
+        meses : [(nombre_mes_normalizado, idx_col_dias, idx_col_litros)]
+        grid  : DataFrame crudo completo para el desapivotado
+    """
+    raw = pd.read_excel(path, sheet_name=sheet, header=None)
+    meta: dict = {}
+    meses: list[tuple[str, int, int]] = []
+    for _, row in raw.iterrows():
+        label = normalize_label(row.iloc[0]) if len(row) else ""
+        if label and len(row) > 1 and pd.notna(row.iloc[1]):
+            meta.setdefault(label, row.iloc[1])
+        for j, val in enumerate(row):
+            nombre = normalize_label(val)
+            if nombre in MESES_ES:
+                meses.append((nombre, j, j + 1))
+    return {"meta": meta, "meses": meses, "grid": raw}
