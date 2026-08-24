@@ -6,3 +6,11 @@ toolbarMode = "minimal"
 
 [server]
 headless = true
+
+# Identidad visual de campo: verde bosque, crema y tinta.
+[theme]
+base = "light"
+primaryColor = "#2E4B2F"
+backgroundColor = "#F6F4EC"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#24301F"
