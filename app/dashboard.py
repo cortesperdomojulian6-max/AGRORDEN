@@ -650,7 +650,8 @@ def barra_lateral() -> tuple[str, str | None]:
         )
         seccion = st.radio(
             "Sección",
-            ["Resumen y alertas", "Días abiertos", "Peso", "Producción"],
+            ["Resumen y alertas", "Días abiertos", "Peso", "Producción",
+             "Registrar peso", "Registrar evento repro", "Registrar nota"],
             label_visibility="collapsed",
         )
         lotes = leer_vista(V_HATO)["lote"].tolist()
@@ -1051,11 +1052,154 @@ def pagina_produccion(lote: str | None) -> None:
         )
 
 
+# --- INSERTS (Fase C) ---
+SQL_INSERT_PESAJE = """
+    INSERT INTO pesajes (id_animal, fecha, peso_kg, archivo_origen, hoja_origen, provisional, fuente, registrado_por)
+    SELECT id_interno, %s, %s, %s, %s, false, %s, %s
+    FROM animales WHERE numero_visible = %s
+    RETURNING id_pesaje
+"""
+
+SQL_INSERT_EVENTO_REPRO = """
+    INSERT INTO eventos_reproductivos (id_animal, id_tipo_evento, fecha_evento, archivo_origen, hoja_origen)
+    SELECT a.id_interno, c.id_tipo_evento, %s, %s, %s
+    FROM animales a
+    JOIN cat_eventos_reproductivos c ON c.nombre_tipo = %s
+    WHERE a.numero_visible = %s
+    RETURNING id_evento
+"""
+
+SQL_INSERT_NOTA = """
+    INSERT INTO notas_vaca (id_animal, observacion)
+    SELECT id_interno, %s
+    FROM animales WHERE numero_visible = %s
+    RETURNING id
+"""
+
+TIPOS_EVENTO_REPRO = [
+    "Parto", "Monta", "Servicio", "Diagnóstico de Preñez",
+    "Celo Posparto", "Secado"
+]
+
+
+def obtener_animales_ordenados() -> list[str]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT numero_visible FROM animales ORDER BY numero_visible")
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def pagina_registrar_peso(lote: str | None) -> None:
+    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
+    cabecera(eyebrow, "Registrar peso",
+             "Agregue un pesaje nuevo. El animal debe existir en el hato.")
+    animales = obtener_animales_ordenados()
+    with st.form("form_peso", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            animal = st.selectbox("Animal (chapeta)", animales, key="peso_animal")
+            fecha = st.date_input("Fecha", key="peso_fecha")
+        with col2:
+            peso = st.number_input("Peso (kg)", min_value=10.0, max_value=2000.0,
+                                   step=0.5, format="%.1f", key="peso_kg")
+            obs = st.text_input("Hoja origen (opcional)", key="peso_hoja")
+        enviado = st.form_submit_button("Guardar pesaje", type="primary")
+    if enviado:
+        if not animal or peso is None:
+            st.error("Faltan datos obligatorios.")
+        else:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(SQL_INSERT_PESAJE,
+                                (fecha, peso, "dashboard", obs or "manual", "dashboard", "usuario", animal))
+                    nuevo_id = cur.fetchone()[0]
+                conn.commit()
+                leer_vista.clear()
+                st.success(f"Pesaje guardado (id {nuevo_id}) para N.º {animal}: {peso:.1f} kg el {fecha_corta(fecha)}")
+            except Exception as e:
+                conn.rollback()
+                st.error(f"No se pudo guardar: {e}")
+            finally:
+                conn.close()
+
+
+def pagina_registrar_repro(lote: str | None) -> None:
+    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
+    cabecera(eyebrow, "Registrar evento reproductivo",
+             "Parto, monta, servicio, diagnóstico, celo o secado. El animal debe existir.")
+    animales = obtener_animales_ordenados()
+    with st.form("form_repro", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            animal = st.selectbox("Animal (chapeta)", animales, key="repro_animal")
+            tipo = st.selectbox("Tipo de evento", TIPOS_EVENTO_REPRO, key="repro_tipo")
+            fecha = st.date_input("Fecha", key="repro_fecha")
+        with col2:
+            obs = st.text_input("Hoja origen (opcional)", key="repro_hoja")
+        enviado = st.form_submit_button("Guardar evento", type="primary")
+    if enviado:
+        if not animal or not tipo:
+            st.error("Faltan datos obligatorios.")
+        else:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(SQL_INSERT_EVENTO_REPRO,
+                                (fecha, "dashboard", obs or "manual", tipo, animal))
+                    nuevo_id = cur.fetchone()[0]
+                conn.commit()
+                leer_vista.clear()
+                st.success(f"Evento '{tipo}' guardado (id {nuevo_id}) para N.º {animal} el {fecha_corta(fecha)}")
+            except Exception as e:
+                conn.rollback()
+                st.error(f"No se pudo guardar: {e}")
+            finally:
+                conn.close()
+
+
+def pagina_registrar_nota(lote: str | None) -> None:
+    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
+    cabecera(eyebrow, "Registrar nota de vaca",
+             "Anotación libre vinculada a un animal. Útil para recordatorios de campo.")
+    animales = obtener_animales_ordenados()
+    with st.form("form_nota", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            animal = st.selectbox("Animal (chapeta)", animales, key="nota_animal")
+        with col2:
+            texto = st.text_area("Texto de la nota", height=100, key="nota_texto")
+        enviado = st.form_submit_button("Guardar nota", type="primary")
+    if enviado:
+        if not animal or not texto.strip():
+            st.error("Faltan datos obligatorios.")
+        else:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(SQL_INSERT_NOTA, (texto.strip(), animal))
+                    nuevo_id = cur.fetchone()[0]
+                conn.commit()
+                leer_vista.clear()
+                st.success(f"Nota guardada (id {nuevo_id}) para N.º {animal}")
+            except Exception as e:
+                conn.rollback()
+                st.error(f"No se pudo guardar: {e}")
+            finally:
+                conn.close()
+
+
 PAGINAS = {
     "Resumen y alertas": pagina_resumen,
     "Días abiertos": pagina_dias_abiertos,
     "Peso": pagina_peso,
     "Producción": pagina_produccion,
+    "Registrar peso": pagina_registrar_peso,
+    "Registrar evento repro": pagina_registrar_repro,
+    "Registrar nota": pagina_registrar_nota,
 }
 
 
