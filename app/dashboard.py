@@ -1,12 +1,14 @@
-"""Dashboard AGRORDEN — capa visual de consulta (SPEC-006).
+"""Dashboard AGRORDEN — capa visual (SPEC-006 + Fase C).
 
 Ejecución:
     streamlit run app/dashboard.py
 
-Principios: solo lectura; conexión por .env; las vistas de SPEC-004 son la API.
-Identidad visual: lenguaje "chapeta" de agrorden-vision.html — tipografía
-Fraunces/IBM Plex, paleta potrero-hueso-hierro-paja, tarjetas con esquina de
-ear-tag. La lógica de datos no cambia: solo presentación.
+Arquitectura visual v3:
+- Header 100% HTML propio (marca + navegación horizontal con iconos + filtro de
+  lote). Navegación por st.query_params: cero dependencia del DOM interno de
+  widgets de Streamlit, horizontal garantizado por flexbox real.
+- Widgets nativos solo dentro del contenido (formularios, tablas, gráficas).
+- Lógica de datos intacta: vistas de SPEC-004 son la API; inserts de Fase C.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import base64
 import io
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pandas as pd
 import plotly.express as px
@@ -70,40 +73,138 @@ def fotos_de(animal: str) -> list[Path]:
     return sorted(carpeta.glob("foto_*")) if carpeta.exists() else []
 
 
+# ---------------------------------------------------------------------------
+# Iconos SVG (trazo lucide, 24x24 viewBox, stroke currentColor)
+# ---------------------------------------------------------------------------
+_I = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{}</svg>'
+ICONOS = {
+    "grid": _I.format('<rect x="3" y="3" width="7" height="7" rx="1.5"/>'
+                      '<rect x="14" y="3" width="7" height="7" rx="1.5"/>'
+                      '<rect x="3" y="14" width="7" height="7" rx="1.5"/>'
+                      '<rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+    "clock": _I.format('<circle cx="12" cy="12" r="9"/>'
+                       '<polyline points="12 7 12 12 15.5 13.5"/>'),
+    "scale": _I.format('<path d="M16 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/>'
+                       '<path d="M2 16l3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1z"/>'
+                       '<path d="M7 21h10"/><path d="M12 3v18"/>'
+                       '<path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>'),
+    "drop": _I.format('<path d="M12 2.7l5.66 5.66a8 8 0 1 1-11.31 0z"/>'),
+    "plus": _I.format('<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>'),
+    "heart": _I.format('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>'),
+    "pen": _I.format('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
+    "animal": _I.format('<path d="M11 4a6 6 0 0 0-6 6c0 2 .8 3.6 2 4.8V18a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-3.2c1.2-1.2 2-2.8 2-4.8a6 6 0 0 0-6-6z"/><circle cx="9" cy="10" r=".6"/><circle cx="13" cy="10" r=".6"/>'),
+    "leaf": _I.format('<path d="M11 20A7 7 0 0 1 4 13c0-4 3-8 9-9 4.5-.75 7 1 7 1s-1 2-3 5c-2.5 4-4 6-6 10z"/><path d="M4 21c4-3 7-6 9-9"/>'),
+}
+
+NAV = [
+    ("resumen", "Resumen", "grid"),
+    ("dias", "Días abiertos", "clock"),
+    ("peso", "Peso", "scale"),
+    ("produccion", "Producción", "drop"),
+    ("__sep__", "", ""),
+    ("pesaje", "+ Pesaje", "plus"),
+    ("repro", "+ Repro", "heart"),
+    ("nota", "+ Nota", "pen"),
+]
+
 CSS_GLOBAL = """
 <style>
 :root {
-  --ink:#211C16; --ink-soft:#57503F;
-  --hide:#E7DCC2; --hide-dark:#D9C89C; --bone:#FAF6EC;
-  --pasture:#233B29; --pasture-2:#33553B; --pasture-soft:#DCE6DA;
-  --iron:#9A4522; --iron-soft:#F3E1D4;
+  --ink:#211C16; --ink-soft:#5A5140;
+  --hide:#F0E7CE; --hide-dark:#D9C89C; --bone:#FFFDF6;
+  --paper:#E9DEC3;
+  --pasture:#22402C; --pasture-2:#31573B; --pasture-soft:#DCE6DA;
+  --iron:#A34A21; --iron-soft:#F6E3D8;
   --straw:#B9862E; --straw-soft:#F5EAD3;
   --moss:#5C7A4E; --moss-soft:#E6EDDF;
-  --line:#CBB98F;
-  --sombra: 0 10px 30px rgba(33,28,22,.10);
+  --line:#D9CBA6; --line-soft:#E8DCC0;
+  --sombra-sm: 0 1px 2px rgba(33,28,22,.07), 0 4px 16px rgba(33,28,22,.08);
+  --sombra-md: 0 2px 8px rgba(33,28,22,.10), 0 14px 38px rgba(33,28,22,.14);
 }
-html, body { background:var(--hide); }
-[data-testid="stAppViewContainer"] {
-  background:var(--hide);
-  background-image: radial-gradient(circle at 1px 1px,
-    rgba(33,28,22,.05) 1px, transparent 0);
-  background-size:22px 22px;
+
+/* ---------- ocultar chrome de streamlit ---------- */
+[data-testid="stSidebar"],
+[data-testid="stCollapseSidebar"],
+[data-testid="stSidebarCollapsedControl"] { display:none !important; }
+#MainMenu { visibility:hidden; }
+footer { visibility:hidden; }
+[data-testid="stToolbar"] { display:none; }
+
+/* ---------- fondo y contenedor ---------- */
+html, body { background:var(--paper); }
+[data-testid="stAppViewContainer"] { background:var(--paper); }
+[data-testid="stHeader"] { background:transparent; height:0.4rem; }
+.block-container {
+  padding-top:1.1rem; padding-bottom:4rem; max-width:1280px;
+  padding-left:clamp(16px,4vw,44px); padding-right:clamp(16px,4vw,44px);
 }
-[data-testid="stHeader"] { background:transparent; }
-.block-container { padding-top:2rem; padding-bottom:3rem; max-width:1180px; }
 
 h1 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !important;
-     font-weight:600 !important; letter-spacing:-.2px; }
+     font-weight:600 !important; }
 h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !important; }
 
-.cabecera-eyebrow { font-size:11px; letter-spacing:2px; text-transform:uppercase;
-  color:var(--ink-soft); font-weight:600; margin-bottom:5px; }
-.cabecera-titulo { font-family:'Fraunces', Georgia, serif; font-size:clamp(25px,3vw,32px);
-  font-weight:600; color:var(--ink); letter-spacing:-.2px; line-height:1.15; }
-.cabecera-nota { color:var(--ink-soft); font-size:13.5px; margin-top:7px;
-  max-width:640px; line-height:1.55; }
-.bloque-cabecera { margin-bottom:20px; }
+/* ---------- header propio (HTML puro, sticky) ---------- */
+.ag-top { position:sticky; top:0; z-index:80;
+  background:rgba(255,253,246,.97); backdrop-filter:blur(10px);
+  border-bottom:2px solid var(--pasture);
+  margin:0 calc(-1 * clamp(16px,4vw,44px)) 18px;
+  padding:13px clamp(16px,4vw,44px) 0;
+  box-shadow:0 6px 24px rgba(33,28,22,.07); }
+.ag-fila1 { display:flex; justify-content:space-between; align-items:center;
+  gap:14px; flex-wrap:wrap; padding-bottom:11px; }
+.ag-marca { display:flex; align-items:center; gap:11px; }
+.ag-logo-mark { width:38px; height:38px; background:var(--pasture);
+  border-radius:11px 11px 11px 4px; position:relative; flex:0 0 38px;
+  box-shadow:var(--sombra-sm); }
+.ag-logo-mark::before { content:""; position:absolute; top:8px; left:8px;
+  width:8px; height:8px; border-radius:50%; background:var(--paper);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.45); }
+.ag-nombre { font-family:'Fraunces', Georgia, serif; font-size:20px; font-weight:700;
+  color:var(--ink); letter-spacing:.4px; line-height:1; }
+.ag-slogan { font-family:'IBM Plex Sans',sans-serif; font-size:9.5px;
+  letter-spacing:1.8px; text-transform:uppercase; color:var(--ink-soft);
+  font-weight:600; margin-top:3px; }
+.ag-hoy { font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:600;
+  color:var(--ink-soft); background:var(--hide); border:1px solid var(--line);
+  border-radius:999px; padding:5px 12px; white-space:nowrap; }
 
+.ag-fila2 { display:flex; align-items:center; gap:5px;
+  overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+  padding-bottom:11px; }
+.ag-fila2::-webkit-scrollbar { display:none; }
+.ag-pill { display:inline-flex; align-items:center; gap:7px; padding:8px 15px;
+  border-radius:999px; background:transparent; border:1px solid transparent;
+  color:var(--ink-soft) !important; text-decoration:none !important;
+  font-family:'IBM Plex Sans',sans-serif; font-size:13.5px;
+  font-weight:500; white-space:nowrap;
+  transition:background .15s ease, border-color .15s ease, color .15s ease; }
+.ag-pill svg { width:15px; height:15px; flex:0 0 15px; }
+.ag-pill:hover { background:var(--hide); border-color:var(--line);
+  color:var(--ink) !important; }
+.ag-pill.activa { background:var(--pasture); border-color:var(--pasture);
+  color:#F7F3E6 !important; font-weight:600; box-shadow:var(--sombra-sm); }
+.ag-pill.captura { border:1px dashed var(--line); }
+.ag-pill.captura:hover { border-color:var(--straw); color:var(--ink) !important; }
+.ag-pill.captura.activa { background:var(--straw); border:1px solid var(--straw);
+  color:#FFF8EA !important; }
+.ag-sep { width:1px; height:22px; background:var(--line); margin:0 7px;
+  flex:0 0 1px; }
+
+.ag-fila3 { display:flex; align-items:center; gap:7px; flex-wrap:wrap;
+  padding-bottom:13px; }
+.ag-lote-tit { font-family:'IBM Plex Sans',sans-serif; font-size:10px;
+  letter-spacing:1.5px; text-transform:uppercase; color:var(--ink-soft);
+  font-weight:700; margin-right:3px; }
+.ag-lchip { font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600;
+  padding:4px 12px; border-radius:999px; background:var(--bone);
+  border:1px solid var(--line); color:var(--ink) !important;
+  text-decoration:none !important;
+  white-space:nowrap; transition:border-color .15s ease, background .15s ease; }
+.ag-lchip:hover { border-color:var(--straw); }
+.ag-lchip.activa { background:var(--straw); border-color:var(--straw);
+  color:#FFF8EA !important; }
+
+/* ---------- tarjetas base ---------- */
 .tag { background:var(--bone); border:1px solid var(--line);
   border-radius:14px 14px 14px 4px; position:relative; }
 .tag::before { content:""; position:absolute; top:10px; left:10px; width:9px; height:9px;
@@ -111,25 +212,48 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
   box-shadow: inset 0 1px 2px rgba(33,28,22,.35); pointer-events:none; }
 .tag.sin-hueco::before { display:none; }
 
-.kpi-row { display:flex; gap:14px; flex-wrap:wrap; margin:4px 0 18px 0; }
-.kpi { flex:1 1 190px; padding:17px 18px 15px; box-shadow:var(--sombra); }
-.kpi .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-.kpi .label { font-size:11px; letter-spacing:1.2px; text-transform:uppercase;
-  font-weight:600; color:var(--ink-soft); }
-.kpi .trend { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:600;
-  padding:3px 8px; border-radius:999px; white-space:nowrap; }
-.kpi .trend.ok   { background:var(--moss-soft); color:var(--moss); }
-.kpi .trend.ojo  { background:var(--straw-soft); color:#8A5F16; }
-.kpi .trend.malo { background:var(--iron-soft); color:var(--iron); }
-.kpi .value { font-family:'Fraunces', Georgia, serif; font-size:36px; font-weight:600;
-  line-height:1.05; color:var(--ink); margin-top:9px; }
-.kpi .sub { font-size:12px; color:var(--ink-soft); margin-top:4px; }
-.kpi.accent-pasture { border-top:3px solid var(--pasture); }
-.kpi.accent-moss    { border-top:3px solid var(--moss); }
-.kpi.accent-straw   { border-top:3px solid var(--straw); }
-.kpi.accent-iron    { border-top:3px solid var(--iron); }
+/* ---------- cabecera de página compacta ---------- */
+.pg-head { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+  margin:0 0 4px; }
+.pg-head .t { font-family:'Fraunces', Georgia, serif; font-size:clamp(24px,2.6vw,30px);
+  font-weight:600; color:var(--ink); letter-spacing:-.2px; line-height:1.15; }
+.pg-ctx { font-family:'IBM Plex Sans',sans-serif; font-size:10.5px;
+  letter-spacing:1.6px; text-transform:uppercase; color:var(--ink-soft);
+  font-weight:700; background:var(--hide); border:1px solid var(--line);
+  border-radius:999px; padding:4px 11px; }
+.pg-nota { color:var(--ink-soft); font-size:13px; max-width:760px;
+  line-height:1.5; margin:0 0 18px; }
 
-.tarjeta { padding:18px 20px 16px; box-shadow:var(--sombra); margin-bottom:16px; }
+/* ---------- KPIs ---------- */
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
+  gap:14px; margin:4px 0 20px 0; }
+.kpi { padding:16px 18px 14px; box-shadow:var(--sombra-sm);
+  display:flex; flex-direction:column; }
+.kpi .top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.kpi .label { font-size:10.5px; letter-spacing:1.2px; text-transform:uppercase;
+  font-weight:700; color:var(--ink-soft); }
+.kpi .ico { width:32px; height:32px; border-radius:9px 9px 9px 3px;
+  display:flex; align-items:center; justify-content:center; flex:0 0 32px; }
+.kpi .ico svg { width:16px; height:16px; }
+.kpi .trend { font-family:'IBM Plex Mono',monospace; font-size:10.5px; font-weight:700;
+  padding:3px 8px; border-radius:999px; white-space:nowrap; }
+.kpi .trend.ok   { background:var(--moss-soft); color:#3D5535; }
+.kpi .trend.ojo  { background:var(--straw-soft); color:#7A5510; }
+.kpi .trend.malo { background:var(--iron-soft); color:#8A3A18; }
+.kpi .value { font-family:'Fraunces', Georgia, serif; font-size:37px; font-weight:600;
+  line-height:1.05; color:var(--ink); margin-top:8px; }
+.kpi .sub { font-size:12px; color:var(--ink-soft); margin-top:4px; }
+.kpi.accent-pasture { border-left:4px solid var(--pasture); }
+.kpi.accent-pasture .ico { background:var(--pasture-soft); color:var(--pasture); }
+.kpi.accent-moss    { border-left:4px solid var(--moss); }
+.kpi.accent-moss .ico { background:var(--moss-soft); color:#3D5535; }
+.kpi.accent-straw   { border-left:4px solid var(--straw); }
+.kpi.accent-straw .ico { background:var(--straw-soft); color:#7A5510; }
+.kpi.accent-iron    { border-left:4px solid var(--iron); }
+.kpi.accent-iron .ico { background:var(--iron-soft); color:#8A3A18; }
+
+/* ---------- libro / chips / estados ---------- */
+.tarjeta { padding:18px 20px 16px; box-shadow:var(--sombra-sm); margin-bottom:16px; }
 .tarjeta-titulo { font-family:'Fraunces', Georgia, serif; font-size:18px;
   font-weight:600; color:var(--ink); }
 .tarjeta-nota { font-size:12.5px; color:var(--ink-soft); margin:2px 0 12px 0;
@@ -144,7 +268,7 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
 .libro-cuerpo { flex:1; min-width:0; }
 .libro-titulo { font-size:13.5px; font-weight:600; color:var(--ink); }
 .libro-sub { font-size:12px; color:var(--ink-soft); margin-top:1px; line-height:1.45; }
-.libro-chapeta { font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600;
+.libro-chapeta { font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:700;
   background:var(--hide); border:1px solid var(--line);
   border-radius:8px 8px 8px 2px; padding:5px 9px 5px 16px; white-space:nowrap;
   position:relative; color:var(--ink); }
@@ -162,8 +286,9 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
 .chip-parto b { display:block; font-size:13px; color:var(--pasture); font-weight:700; }
 .chip-parto span { font-family:'IBM Plex Sans',sans-serif; font-size:11px; }
 
-.estado-grid { display:flex; gap:14px; flex-wrap:wrap; margin:12px 0 16px 0; }
-.estado-card { flex:1 1 170px; box-shadow:var(--sombra); padding:16px 18px 14px;
+.estado-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:14px; margin:12px 0 16px 0; }
+.estado-card { box-shadow:var(--sombra-sm); padding:16px 18px 14px;
   border-top:4px solid var(--piedra, var(--line)); }
 .estado-card .num { font-family:'Fraunces', Georgia, serif; font-size:34px;
   font-weight:600; color:var(--ink); line-height:1.1; }
@@ -171,11 +296,11 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
   text-transform:uppercase; margin-top:5px; color:var(--ink-soft); }
 .estado-card .det { color:var(--ink-soft); font-size:12px; margin-top:3px; }
 .estado-card.revisar  { border-top-color:var(--iron); }
-.estado-card.revisar .tit { color:var(--iron); }
+.estado-card.revisar .tit { color:#8A3A18; }
 .estado-card.atencion { border-top-color:var(--straw); }
-.estado-card.atencion .tit { color:#8A5F16; }
+.estado-card.atencion .tit { color:#7A5510; }
 .estado-card.ok       { border-top-color:var(--moss); }
-.estado-card.ok .tit { color:var(--moss); }
+.estado-card.ok .tit { color:#3D5535; }
 
 .aviso-suave { background:var(--straw-soft); border-left:4px solid var(--straw);
   border-radius:10px 10px 10px 3px; padding:12px 15px; margin:7px 0;
@@ -183,57 +308,77 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
 .aviso-fuerte { background:var(--iron-soft); border-left:4px solid var(--iron);
   border-radius:10px 10px 10px 3px; padding:12px 15px; margin:7px 0;
   color:#6E3013; font-size:14.5px; }
-.nota-leer { background:rgba(250,246,236,.85); border:1px dashed var(--line);
+.nota-leer { background:rgba(255,253,246,.9); border:1px dashed var(--line);
   border-radius:10px 10px 10px 3px; padding:12px 15px; margin:8px 0 2px 0;
   color:var(--ink-soft); font-size:14px; line-height:1.5; }
 
-.marca { font-family:'Fraunces', Georgia, serif; margin-bottom:14px; }
-.marca .logo { font-size:21px; font-weight:700; color:var(--bone); letter-spacing:.5px; }
-.marca .slogan { margin-top:3px; color:#C7D3C4; font-size:9.5px;
-  letter-spacing:1.6px; text-transform:uppercase;
-  font-family:'IBM Plex Sans',sans-serif; }
-.usuario-riel { display:flex; align-items:center; gap:10px; margin-top:14px;
-  padding-top:14px; border-top:1px solid rgba(255,255,255,.12); }
-.usuario-riel .avatar { width:32px; height:32px; border-radius:9px;
-  background:var(--straw); color:var(--ink); font-family:'Fraunces',serif;
-  font-weight:700; font-size:13px; display:flex; align-items:center;
-  justify-content:center; flex:0 0 32px; }
-.usuario-riel .quien { font-size:12.5px; line-height:1.35; }
-.usuario-riel .quien b { display:block; color:#FAF6EC; font-size:12.5px; }
-.usuario-riel .quien span { color:#B9C4B4; font-size:11px; }
-
-[data-testid="stSidebar"] { background:var(--pasture); border-right:none; }
-[data-testid="stSidebar"] * { color:#D8E0D3; }
-[data-testid="stSidebar"] hr { border-color:rgba(255,255,255,.14); }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-  color:#B9C4B4 !important; font-size:12px; line-height:1.5; }
-[data-testid="stSidebar"] [data-testid="stRadio"] label:hover div:first-child {
-  background:rgba(255,255,255,.08); border-radius:8px; }
-[data-testid="stSidebar"] [data-testid="stSelectbox"] label,
-[data-testid="stSidebar"] [data-testid="stRadio"] label { font-weight:500; }
-
-[data-testid="stMetric"] { display:none; }
+/* ---------- botones ---------- */
+button[kind="primaryFormSubmit"], button[kind="primary"] {
+  background:var(--pasture) !important; color:#FAF6EC !important;
+  border:1px solid var(--pasture) !important; font-weight:600 !important;
+  font-family:'IBM Plex Sans',sans-serif !important; font-size:14px !important;
+  border-radius:11px 11px 11px 4px !important; padding:8px 18px !important;
+  transition:background .16s ease; }
+button[kind="primaryFormSubmit"]:hover, button[kind="primary"]:hover {
+  background:var(--pasture-2) !important; border-color:var(--pasture-2) !important; }
 .stDownloadButton button, .stButton button {
-  background:var(--bone); color:var(--ink); border:1px solid var(--line);
-  border-radius:12px 12px 12px 3px; font-weight:600;
-  font-family:'IBM Plex Sans',sans-serif; }
+  background:var(--bone) !important; color:var(--ink) !important;
+  border:1px solid var(--line) !important; font-weight:600 !important;
+  font-family:'IBM Plex Sans',sans-serif !important; font-size:13.5px !important;
+  border-radius:11px 11px 11px 4px !important; padding:7px 15px !important;
+  transition:border-color .16s ease, background .16s ease; }
 .stDownloadButton button:hover, .stButton button:hover {
-  background:var(--hide); color:var(--ink); border-color:var(--hide-dark); }
+  border-color:var(--pasture) !important; color:var(--pasture) !important; }
+button:focus-visible { outline:none !important;
+  box-shadow:0 0 0 3px rgba(34,64,44,.25) !important; }
 
+/* ---------- inputs ---------- */
+[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
+[data-testid="stTextArea"] textarea, [data-testid="stDateInput"] input {
+  background:var(--bone) !important; color:var(--ink) !important;
+  border:1px solid var(--line) !important;
+  border-radius:10px 10px 10px 3px !important; }
+div[data-baseweb="select"] > div {
+  background:var(--bone); border-radius:10px 10px 10px 3px !important; }
+[data-testid="stForm"] { border:1px solid var(--line); background:var(--hide);
+  border-radius:14px 14px 14px 4px; padding:22px 22px 16px; }
+
+/* ---------- feedback ---------- */
+[data-testid="stSuccess"] { background:var(--moss-soft) !important;
+  border-color:#C3D3C0 !important; color:#33472F !important;
+  border-radius:12px 12px 12px 4px !important; }
+[data-testid="stError"] { background:var(--iron-soft) !important;
+  border-color:#E5C9B4 !important; color:#6E3013 !important;
+  border-radius:12px 12px 12px 4px !important; }
+[data-testid="stInfo"] { background:var(--straw-soft) !important;
+  border-color:#E8D9B4 !important; color:#6B5416 !important;
+  border-radius:12px 12px 12px 4px !important; }
+
+[data-testid="stExpander"] { background:var(--bone); border:1px solid var(--line);
+  border-radius:12px 12px 12px 4px; }
+[data-testid="stMetric"] { display:none; }
+
+/* ---------- gráficas y tablas ---------- */
+[data-testid="stPlotlyChart"] { background:var(--bone);
+  border:1px solid var(--line); border-radius:14px 14px 14px 4px;
+  padding:10px 8px 2px; box-shadow:var(--sombra-sm); margin-bottom:14px; }
+[data-testid="stDataFrame"] { border:1px solid var(--line);
+  border-radius:12px 12px 12px 4px; overflow:hidden; margin-bottom:12px; }
 .js-plotly-plot .plotly .modebar { background:transparent !important; }
 
-@media (max-width:640px) {
-  .block-container { padding-top:1.2rem; }
-  .kpi .value { font-size:29px; }
+@media (max-width:720px) {
+  .block-container { padding-top:0.8rem; }
+  .kpi .value { font-size:30px; }
   .estado-card .num { font-size:27px; }
+  .ag-hoy { display:none; }
 }
 </style>
 """
 
 CSS_FICHA = """
 <style>
-.ficha { display:block; max-width:720px; margin:0 auto 18px auto;
-  box-shadow:var(--sombra); border-radius:16px 16px 16px 4px; overflow:hidden;
+.ficha { display:block; max-width:760px; margin:0 auto 18px auto;
+  box-shadow:var(--sombra-sm); border-radius:16px 16px 16px 4px; overflow:hidden;
   background:var(--bone); border:1px solid var(--line); }
 .ficha-hero { position:relative; height:clamp(200px, 34vw, 280px);
   background:linear-gradient(165deg,#2B4A33,#16281B); }
@@ -259,7 +404,7 @@ CSS_FICHA = """
   font-family:'IBM Plex Mono',monospace; text-shadow:0 1px 3px rgba(0,0,0,.5); }
 .ficha-mini { position:absolute; right:16px; top:16px; width:66px; height:66px;
   border-radius:10px 10px 10px 3px; object-fit:cover;
-  border:3px solid rgba(250,246,236,.94); box-shadow:0 2px 12px rgba(0,0,0,.45); }
+  border:3px solid rgba(255,253,246,.94); box-shadow:0 2px 12px rgba(0,0,0,.45); }
 .vaca-foto { cursor:zoom-in; }
 .ficha-cuerpo { padding:20px 22px 18px; }
 .ficha-stats { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
@@ -374,12 +519,12 @@ LIGHTBOX_JS = """
 </script>
 """
 
-PALETA_GRAFICAS = ["#233B29", "#9A4522", "#B9862E", "#33553B", "#5C7A4E"]
+PALETA_GRAFICAS = ["#22402C", "#A34A21", "#B9862E", "#31573B", "#5C7A4E"]
 
 COLORES_ETAPA = {
     "ORDEÑO": "#5C7A4E",
-    "PREÑEZ": "#33553B",
-    "VACIA": "#9A4522",
+    "PREÑEZ": "#31573B",
+    "VACIA": "#A34A21",
     "HORRA": "#B9862E",
     "REPRODUCTOR": "#6B5740",
 }
@@ -390,44 +535,59 @@ def color_etapa(etapa: str) -> str:
     for clave, color in COLORES_ETAPA.items():
         if clave in etapa_up:
             return color
-    return "#57503F"
+    return "#5A5140"
 
 
-def estilizar(fig, titulo: str | None = None):
-    fig.update_layout(
-        font=dict(family="'IBM Plex Sans', sans-serif", size=13, color="#211C16"),
-        title=dict(text=titulo, font=dict(family="'Fraunces', Georgia, serif",
-                                          size=17, color="#211C16"), x=0.01),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(gridcolor="#D9CDA8", zeroline=False),
-        yaxis=dict(gridcolor="#D9CDA8", zeroline=False),
-        legend=dict(bgcolor="#FAF6EC", bordercolor="#CBB98F", borderwidth=1),
-        margin=dict(l=10, r=10, t=46 if titulo else 16, b=10),
-        hovermode="closest",
+def estilizar(fig, titulo: str | None = None, alto: int = 380):
+    layout = dict(
+        font=dict(family="'IBM Plex Sans', sans-serif", size=12.5, color="#211C16"),
+        paper_bgcolor="#FFFDF6",
+        plot_bgcolor="#FFFDF6",
+        margin=dict(l=54, r=26, t=58 if titulo else 24, b=46),
+        height=alto,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                    xanchor="left", x=0, bgcolor="rgba(0,0,0,0)",
+                    borderwidth=0),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#22402C", bordercolor="#22402C",
+                        font=dict(color="#FAF6EC",
+                                  family="'IBM Plex Sans', sans-serif")),
     )
+    if titulo:
+        layout["title"] = dict(
+            text=titulo,
+            font=dict(family="'Fraunces', Georgia, serif",
+                      size=17, color="#211C16"),
+            x=0.005, xanchor="left", pad=dict(t=4, b=12),
+        )
+    fig.update_layout(**layout)
+    fig.update_xaxes(gridcolor="#E8DCC0", zeroline=False, linecolor="#D9CBA6",
+                     hoverformat="%d/%m/%y")
+    fig.update_yaxes(gridcolor="#E8DCC0", zeroline=False, linecolor="#D9CBA6")
     return fig
 
 
-def cabecera(eyebrow: str, titulo: str, nota: str | None = None) -> None:
-    html = ('<div class="bloque-cabecera">'
-            f'<div class="cabecera-eyebrow">{eyebrow}</div>'
-            f'<div class="cabecera-titulo">{titulo}</div>')
+def cabecera(titulo: str, contexto: str, nota: str | None = None) -> None:
+    html = (f'<div class="pg-head"><div class="t">{titulo}</div>'
+            f'<span class="pg-ctx">{contexto}</span></div>')
     if nota:
-        html += f'<div class="cabecera-nota">{nota}</div>'
-    st.markdown(html + "</div>", unsafe_allow_html=True)
+        html += f'<div class="pg-nota">{nota}</div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def kpis(*placas: dict) -> None:
-    html = '<div class="kpi-row">'
+    html = '<div class="kpi-grid">'
     for p in placas:
         trend = ""
         if p.get("tendencia"):
             texto, clase = p["tendencia"]
             trend = f'<span class="trend {clase}">{texto}</span>'
+        ico = ""
+        if p.get("icono"):
+            ico = f'<span class="ico">{p["icono"]}</span>'
         html += (
             f'<div class="tag kpi accent-{p.get("acento", "pasture")} sin-hueco">'
-            f'<div class="top"><span class="label">{p["etiqueta"]}</span>{trend}</div>'
+            f'<div class="top"><span class="label">{p["etiqueta"]}</span>{ico}{trend}</div>'
             f'<div class="value">{p["valor"]}</div>'
             f'<div class="sub">{p.get("detalle", "")}</div></div>'
         )
@@ -641,27 +801,75 @@ def mostrar_ficha(animal: str) -> None:
         components.html(LIGHTBOX_JS, height=0)
 
 
-def barra_lateral() -> tuple[str, str | None]:
-    with st.sidebar:
-        st.markdown(
-            '<div class="marca"><div class="logo">AGRORDEN</div>'
-            '<div class="slogan">Orden del hato</div></div>',
-            unsafe_allow_html=True,
+# ---------------------------------------------------------------------------
+# Header HTML puro + routing por query params
+# ---------------------------------------------------------------------------
+# Navegación en la misma pestaña: Streamlit inyecta target="_blank" en los
+# links de st.markdown; este script intercepta los clics del header y fuerza
+# la navegación en la pestaña actual.
+NAV_JS = """
+<script>
+(function(){
+  var d = window.parent.document;
+  if (d.getElementById('ag-navfix')) return;
+  var s = d.createElement('script');
+  s.id = 'ag-navfix';
+  s.textContent =
+    "document.addEventListener('click',function(e){" +
+    "var a=e.target&&e.target.closest?e.target.closest('a.ag-pill,a.ag-lchip'):null;" +
+    "if(a){e.preventDefault();window.location.href=a.getAttribute('href');}" +
+    "},true);";
+  d.head.appendChild(s);
+})();
+</script>
+"""
+
+
+def _url(page: str, lote_q: str) -> str:
+    params = {"page": page}
+    if lote_q != "Todos":
+        params["lote"] = lote_q
+    return "?" + urlencode(params)
+
+
+def header_html(page: str, lote_q: str, lotes: list[str]) -> str:
+    hoy = pd.Timestamp.now().strftime("%d/%m/%Y")
+
+    pills = []
+    for key, etiqueta, icono in NAV:
+        if key == "__sep__":
+            pills.append('<span class="ag-sep"></span>')
+            continue
+        activa = " activa" if key == page else ""
+        captura = " captura" if key in ("pesaje", "repro", "nota") else ""
+        pills.append(
+            f'<a class="ag-pill{captura}{activa}" target="_self" '
+            f'href="{_url(key, lote_q)}">'
+            f"{ICONOS[icono]}<span>{etiqueta}</span></a>"
         )
-        seccion = st.radio(
-            "Sección",
-            ["Resumen y alertas", "Días abiertos", "Peso", "Producción",
-             "Registrar peso", "Registrar evento repro", "Registrar nota"],
-            label_visibility="collapsed",
-        )
-        lotes = leer_vista(V_HATO)["lote"].tolist()
-        lote = st.selectbox("Filtrar por lote", ["Todos"] + lotes)
-        st.divider()
-        st.markdown('<div class="usuario-riel"><div class="avatar">JC</div>'
-                    '<div class="quien"><b>Julián Cortés</b>'
-                    "<span>Desarrollador</span></div></div>",
-                    unsafe_allow_html=True)
-    return seccion, None if lote == "Todos" else lote
+    fila2 = "".join(pills)
+
+    chips = [f'<a class="ag-lchip{" activa" if lote_q == "Todos" else ""}" '
+             f'target="_self" href="{_url(page, "Todos")}">Todos</a>']
+    for lote in lotes:
+        activa = " activa" if lote == lote_q else ""
+        chips.append(f'<a class="ag-lchip{activa}" target="_self" '
+                     f'href="{_url(page, lote)}">{lote}</a>')
+    fila3 = ('<span class="ag-lote-tit">Lote</span>'
+             + "".join(chips))
+
+    return (
+        '<div class="ag-top">'
+        '<div class="ag-fila1">'
+        '<div class="ag-marca"><div class="ag-logo-mark"></div>'
+        '<div><div class="ag-nombre">AGRORDEN</div>'
+        '<div class="ag-slogan">Orden del hato</div></div></div>'
+        f'<span class="ag-hoy">HOY · {hoy}</span>'
+        "</div>"
+        f'<nav class="ag-fila2">{fila2}</nav>'
+        f'<div class="ag-fila3">{fila3}</div>'
+        "</div>"
+    )
 
 
 def alertas(lote: str | None) -> None:
@@ -738,8 +946,8 @@ def alertas(lote: str | None) -> None:
 
 
 def pagina_resumen(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Resumen del hato",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Resumen del hato", ctx,
              "Así está su hato hoy, calculado con los registros que usted ya anota.")
     hato = leer_vista(V_HATO)
     if lote:
@@ -750,22 +958,22 @@ def pagina_resumen(lote: str | None) -> None:
     kpis(
         {"etiqueta": "Animales", "valor": str(total),
          "detalle": f"en {len(hato)} lotes" + (" activos" if not lote else ""),
-         "acento": "pasture"},
+         "acento": "pasture", "icono": ICONOS["animal"]},
         {"etiqueta": "Hembras", "valor": str(hembras),
          "detalle": "del total del hato", "tendencia": (pct_hembras, "ok"),
-         "acento": "moss"},
+         "acento": "moss", "icono": ICONOS["heart"]},
         {"etiqueta": "Lotes" if not lote else "Lote seleccionado",
          "valor": str(int((hato["total"] > 0).sum()) if not lote else lote),
-         "acento": "straw"},
+         "acento": "straw", "icono": ICONOS["leaf"]},
     )
     if not lote:
-        fig_hato_tabla = hato.rename(columns={
+        tabla_hato = hato.rename(columns={
             "lote": "Lote", "hembras": "Hembras", "machos": "Machos",
             "total": "Total"})
-        st.dataframe(fig_hato_tabla, use_container_width=True, hide_index=True)
+        st.dataframe(tabla_hato, use_container_width=True, hide_index=True)
     else:
         st.dataframe(hato, use_container_width=True, hide_index=True)
-    st.divider()
+    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
     st.markdown('<h3 style="font-family:\'Fraunces\',Georgia,serif;font-size:20px;'
                 'margin-bottom:4px;">A qué le debe prestar atención</h3>',
                 unsafe_allow_html=True)
@@ -773,8 +981,8 @@ def pagina_resumen(lote: str | None) -> None:
 
 
 def pagina_dias_abiertos(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Días abiertos",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Días abiertos", ctx,
              "Los <strong>días abiertos</strong> son los días que lleva una vaca "
              "sin quedar preñada desde su último parto. Entre menos días, mejor: "
              "lo ideal es que quede preñada pronto después de parir.")
@@ -789,9 +997,11 @@ def pagina_dias_abiertos(lote: str | None) -> None:
         kpis(
             {"etiqueta": "Promedio de días sin preñar",
              "valor": f"{dias['dias_abiertos'].mean():.0f}",
-             "detalle": "entre las vacas evaluadas", "acento": "pasture"},
+             "detalle": "entre las vacas evaluadas", "acento": "pasture",
+             "icono": ICONOS["clock"]},
             {"etiqueta": "Vacas evaluadas", "valor": str(len(dias)),
-             "detalle": "con último parto registrado", "acento": "straw"},
+             "detalle": "con último parto registrado", "acento": "straw",
+             "icono": ICONOS["animal"]},
         )
 
         criticas = dias[dias["dias_abiertos"] > UMBRAL_DIAS_ABIERTOS]
@@ -831,28 +1041,29 @@ def pagina_dias_abiertos(lote: str | None) -> None:
         orden = ["Al día", "En atención", "Por revisar"]
         resumen["Grupo"] = pd.Categorical(resumen["Grupo"], orden, ordered=True)
         resumen = resumen.sort_values("Grupo")
-        resumen["Hato"] = "Hato"
         fig_hato = px.bar(
-            resumen, x="Vacas", y="Hato", color="Grupo",
-            orientation="h",
+            resumen, x="Grupo", y="Vacas", color="Grupo",
             color_discrete_map={
                 "Al día": "#5C7A4E", "En atención": "#B9862E",
-                "Por revisar": "#9A4522",
+                "Por revisar": "#A34A21",
             },
-            text="Vacas",
         )
         fig_hato.update_traces(
-            textposition="inside", insidetextanchor="middle",
-            textfont=dict(color="#FFFFFF", size=15,
-                          family="'IBM Plex Sans', sans-serif"),
-            marker_line_width=0,
+            texttemplate="%{y}", textposition="outside",
+            textfont=dict(size=17, family="'Fraunces', Georgia, serif",
+                          color="#211C16"),
+            hovertemplate="%{x}: %{y} vacas<extra></extra>",
+            marker_line_width=0, width=0.55, cliponaxis=False,
         )
-        estilizar(fig_hato, "Así está su hato hoy")
+        estilizar(fig_hato, alto=330)
         fig_hato.update_layout(
-            barmode="stack", height=175, yaxis_title=None, xaxis_title=None,
-            legend_title_text=None,
+            showlegend=False, yaxis_visible=False, yaxis_showgrid=False,
+            xaxis_title=None, yaxis_title=None, hovermode="closest",
+            margin=dict(l=30, r=20, t=18, b=40),
         )
-        st.plotly_chart(fig_hato, use_container_width=True)
+        fig_hato.update_xaxes(categoryarray=orden)
+        st.plotly_chart(fig_hato, use_container_width=True,
+                        config={"displayModeBar": False})
 
         tabla = dias.copy()
         tabla["Estado"] = tabla["dias_abiertos"].apply(grupo)
@@ -896,8 +1107,8 @@ def pagina_dias_abiertos(lote: str | None) -> None:
 
 
 def pagina_peso(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Evolución de peso",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Evolución de peso", ctx,
              "Cuánto pesa cada animal y si está engordando o adelgazando entre un "
              "pesaje y otro. La ganancia se mide en <strong>gramos por día</strong>.")
     todo = leer_vista(V_PESO)
@@ -916,23 +1127,28 @@ def pagina_peso(lote: str | None) -> None:
     kpis(
         {"etiqueta": "Peso actual", "valor": f"{ultimo['peso_actual']:.0f} kg",
          "detalle": f"último pesaje {fecha_corta(ultimo['fecha_actual'])}",
-         "acento": "pasture", "tendencia": tendencia},
+         "acento": "pasture", "tendencia": tendencia, "icono": ICONOS["scale"]},
         {"etiqueta": "Pesajes registrados", "valor": str(len(datos)),
-         "acento": "straw"},
+         "acento": "straw", "icono": ICONOS["grid"]},
     )
     fig = px.line(
         datos, x="fecha_actual", y="peso_actual", markers=True,
         labels={"fecha_actual": "Fecha", "peso_actual": "Peso (kg)"},
     )
-    fig.update_traces(line_color="#9A4522", marker_color="#9A4522")
+    fig.update_traces(line_color="#A34A21", marker_color="#A34A21",
+                      hovertemplate="Peso: %{y:.0f} kg<extra></extra>")
     fig.add_annotation(
         x=ultimo["fecha_actual"], y=ultimo["peso_actual"],
         text=f"Último pesaje: {ultimo['peso_actual']:.0f} kg",
-        showarrow=True, arrowhead=2, arrowcolor="#9A4522",
-        font=dict(color="#6E3013", size=14),
+        showarrow=True, arrowhead=2, arrowcolor="#A34A21",
+        ax=56, ay=-38, standoff=6,
+        font=dict(color="#6E3013", size=12.5,
+                  family="'IBM Plex Sans', sans-serif"),
+        bgcolor="#F6E3D8", bordercolor="#A34A21", borderpad=5,
     )
     estilizar(fig, f"Peso de N.º {animal}")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True,
+                    config={"displayModeBar": False})
     if pd.notna(ultimo["g_dia"]):
         if ultimo["g_dia"] >= 0:
             texto = (
@@ -968,8 +1184,8 @@ def pagina_peso(lote: str | None) -> None:
 
 
 def pagina_produccion(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Curva de lactancia",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Curva de lactancia", ctx,
              "Litros de leche por día. La curva normal sube después del parto, "
              "llega a un <strong>pico</strong> y luego baja poco a poco hasta "
              "el secado.")
@@ -999,7 +1215,10 @@ def pagina_produccion(lote: str | None) -> None:
                     "numero_visible": "Vaca"},
         )
         estilizar(fig_comp, "Comparación de vacas")
-        st.plotly_chart(fig_comp, use_container_width=True)
+        fig_comp.update_traces(
+            hovertemplate="%{fullData.name}: %{y:.1f} L<extra></extra>")
+        st.plotly_chart(fig_comp, use_container_width=True,
+                        config={"displayModeBar": False})
         st.caption("Cada color es una vaca. Si la línea de una vaca queda muy "
                    "por debajo de las demás todo el tiempo, esa vaca produce "
                    "menos y vale la pena revisarla.")
@@ -1012,20 +1231,21 @@ def pagina_produccion(lote: str | None) -> None:
                   if not fila_pico.empty else "—")
     kpis(
         {"etiqueta": "Registros de ordeño", "valor": str(len(datos)),
-         "acento": "pasture"},
+         "acento": "pasture", "icono": ICONOS["drop"]},
         {"etiqueta": "Pico de lactancia", "valor": valor_pico,
          "detalle": fecha_corta(fila_pico.iloc[0]["fecha_pico"])
          if not fila_pico.empty else "sin dato",
-         "acento": "straw"},
+         "acento": "straw", "icono": ICONOS["clock"]},
     )
     fig = px.line(
         datos, x="fecha_real", y="litros", markers=True,
         labels={"fecha_real": "Fecha", "litros": "Litros de leche al día"},
     )
-    fig.update_traces(line_color="#233B29", marker_color="#233B29")
+    fig.update_traces(line_color="#22402C", marker_color="#22402C",
+                      hovertemplate="Leche: %{y:.1f} L<extra></extra>")
     promedio = datos["litros"].mean()
     fig.add_hline(
-        y=promedio, line_dash="dash", line_color="#9A4522",
+        y=promedio, line_dash="dash", line_color="#A34A21",
         annotation_text=f"Su promedio: {promedio:.1f} L",
         annotation_position="top left",
     )
@@ -1035,10 +1255,14 @@ def pagina_produccion(lote: str | None) -> None:
             x=p["fecha_pico"], y=p["litros_pico"],
             text=f"Mejor día: {p['litros_pico']:.0f} L",
             showarrow=True, arrowhead=2, arrowcolor="#B9862E",
-            font=dict(color="#8A5F16", size=14),
+            ax=-52, ay=-38, standoff=6,
+            font=dict(color="#7A5510", size=12.5,
+                      family="'IBM Plex Sans', sans-serif"),
+            bgcolor="#F5EAD3", bordercolor="#B9862E", borderpad=5,
         )
     estilizar(fig, f"Leche diaria de N.º {animal}")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True,
+                    config={"displayModeBar": False})
     boton_excel(datos, f"produccion_{animal}")
     if not fila_pico.empty:
         p = fila_pico.iloc[0]
@@ -1093,8 +1317,8 @@ def obtener_animales_ordenados() -> list[str]:
 
 
 def pagina_registrar_peso(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Registrar peso",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Registrar peso", ctx,
              "Agregue un pesaje nuevo. El animal debe existir en el hato.")
     animales = obtener_animales_ordenados()
     with st.form("form_peso", clear_on_submit=True):
@@ -1115,11 +1339,13 @@ def pagina_registrar_peso(lote: str | None) -> None:
             try:
                 with conn.cursor() as cur:
                     cur.execute(SQL_INSERT_PESAJE,
-                                (fecha, peso, "dashboard", obs or "manual", "dashboard", "usuario", animal))
+                                (fecha, peso, "dashboard", obs or "manual",
+                                 "dashboard", "usuario", animal))
                     nuevo_id = cur.fetchone()[0]
                 conn.commit()
                 leer_vista.clear()
-                st.success(f"Pesaje guardado (id {nuevo_id}) para N.º {animal}: {peso:.1f} kg el {fecha_corta(fecha)}")
+                st.success(f"Pesaje guardado (id {nuevo_id}) para N.º {animal}: "
+                           f"{peso:.1f} kg el {fecha_corta(fecha)}")
             except Exception as e:
                 conn.rollback()
                 st.error(f"No se pudo guardar: {e}")
@@ -1128,9 +1354,10 @@ def pagina_registrar_peso(lote: str | None) -> None:
 
 
 def pagina_registrar_repro(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Registrar evento reproductivo",
-             "Parto, monta, servicio, diagnóstico, celo o secado. El animal debe existir.")
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Registrar evento reproductivo", ctx,
+             "Parto, monta, servicio, diagnóstico, celo o secado. "
+             "El animal debe existir.")
     animales = obtener_animales_ordenados()
     with st.form("form_repro", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -1153,7 +1380,8 @@ def pagina_registrar_repro(lote: str | None) -> None:
                     nuevo_id = cur.fetchone()[0]
                 conn.commit()
                 leer_vista.clear()
-                st.success(f"Evento '{tipo}' guardado (id {nuevo_id}) para N.º {animal} el {fecha_corta(fecha)}")
+                st.success(f"Evento '{tipo}' guardado (id {nuevo_id}) para "
+                           f"N.º {animal} el {fecha_corta(fecha)}")
             except Exception as e:
                 conn.rollback()
                 st.error(f"No se pudo guardar: {e}")
@@ -1162,8 +1390,8 @@ def pagina_registrar_repro(lote: str | None) -> None:
 
 
 def pagina_registrar_nota(lote: str | None) -> None:
-    eyebrow = f"Finca · {lote}" if lote else "Finca · todos los lotes"
-    cabecera(eyebrow, "Registrar nota de vaca",
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Registrar nota de vaca", ctx,
              "Anotación libre vinculada a un animal. Útil para recordatorios de campo.")
     animales = obtener_animales_ordenados()
     with st.form("form_nota", clear_on_submit=True):
@@ -1193,21 +1421,34 @@ def pagina_registrar_nota(lote: str | None) -> None:
 
 
 PAGINAS = {
-    "Resumen y alertas": pagina_resumen,
-    "Días abiertos": pagina_dias_abiertos,
-    "Peso": pagina_peso,
-    "Producción": pagina_produccion,
-    "Registrar peso": pagina_registrar_peso,
-    "Registrar evento repro": pagina_registrar_repro,
-    "Registrar nota": pagina_registrar_nota,
+    "resumen": pagina_resumen,
+    "dias": pagina_dias_abiertos,
+    "peso": pagina_peso,
+    "produccion": pagina_produccion,
+    "pesaje": pagina_registrar_peso,
+    "repro": pagina_registrar_repro,
+    "nota": pagina_registrar_nota,
 }
 
 
 def main() -> None:
     st.markdown(FUENTES, unsafe_allow_html=True)
     st.markdown(CSS_GLOBAL, unsafe_allow_html=True)
-    seccion, lote = barra_lateral()
-    PAGINAS[seccion](lote)
+
+    qp = st.query_params
+    page = qp.get("page", "resumen")
+    if page not in PAGINAS:
+        page = "resumen"
+    lote_q = qp.get("lote", "Todos")
+    lotes = leer_vista(V_HATO)["lote"].tolist()
+    if lote_q != "Todos" and lote_q not in lotes:
+        lote_q = "Todos"
+
+    st.markdown(header_html(page, lote_q, lotes), unsafe_allow_html=True)
+    components.html(NAV_JS, height=0)
+
+    lote = None if lote_q == "Todos" else lote_q
+    PAGINAS[page](lote)
 
 
 if __name__ == "__main__":
