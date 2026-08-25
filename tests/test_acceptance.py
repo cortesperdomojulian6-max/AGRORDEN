@@ -72,7 +72,8 @@ def test_ca04_resultado_en_catalogo_cerrado():
 
 
 def test_ca05_hojas_pesaje_corresponden_a_animales_con_lote():
-    esperado = 97  # perfilado: 97 hojas-animal en PESAJE GENERAL v2
+    """50 animales en lotes Ordeño/Levante/Silvo/Mamon-M (fuente única migración)."""
+    esperado = 50
     rows = fetch_all(
         """
         SELECT count(*) FROM animales a
@@ -97,3 +98,15 @@ def test_ca07_idempotencia_conteos_estables():
 
     conteos_2 = {t: fetch_all(f"SELECT count(*) FROM {t}")[0][0] for t in tablas}
     assert conteos_1 == conteos_2
+
+
+def test_ca08_conteos_baseline_fuente_unica():
+    """Valida conteos actuales post-migración SPEC-007 (fuente única)."""
+    assert fetch_all("SELECT count(*) FROM animales")[0][0] == 51
+    assert fetch_all("SELECT count(*) FROM pesajes")[0][0] == 334
+    assert fetch_all("SELECT count(*) FROM produccion_lechera")[0][0] == 1428
+    assert fetch_all("SELECT count(*) FROM eventos_reproductivos")[0][0] == 86
+    assert fetch_all("SELECT count(*) FROM notas_vaca")[0][0] == 3
+    assert fetch_all("SELECT count(*) FROM hitos_reproductivos")[0][0] == 0
+    assert fetch_all("SELECT count(*) FROM eventos_sanitarios")[0][0] == 238
+    assert fetch_all("SELECT count(*) FROM etl_cuarentena")[0][0] == 0
