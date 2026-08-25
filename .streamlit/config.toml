@@ -7,10 +7,11 @@ toolbarMode = "minimal"
 [server]
 headless = true
 
-# Identidad visual de campo: verde bosque, crema y tinta.
+# Identidad visual "Orden del hato" (agrorden-vision.html):
+# potrero verde bosque, hueso/pergamino, hierro, paja, tinta cálida.
 [theme]
 base = "light"
-primaryColor = "#2E4B2F"
-backgroundColor = "#F6F4EC"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#24301F"
+primaryColor = "#B9862E"
+backgroundColor = "#E7DCC2"
+secondaryBackgroundColor = "#FAF6EC"
+textColor = "#211C16"
