@@ -22,6 +22,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -58,7 +59,49 @@ V_PROD = """
 """
 V_PICO = "SELECT numero_visible, fecha_pico, litros_pico FROM v_pico_lactancia"
 
+V_CAT = """
+    SELECT a.numero_visible, a.etapa_actual,
+           COALESCE(l.nombre_lote,'(sin lote)') AS nombre_lote
+    FROM animales a
+    LEFT JOIN lotes l ON l.id_lote = a.id_lote_actual
+    ORDER BY a.numero_visible
+"""
+
 CARPETA_FOTOS = Path(__file__).resolve().parent.parent / "data" / "fotos"
+CARPETA_THUMBS = CARPETA_FOTOS.parent / "fotos_thumbs"
+
+
+@st.cache_data(ttl=3600)
+def thumb_b64(animal: str, foto_name: str, mtime: float) -> str:
+    """Miniatura 280px JPEG 72 — cacheada por mtime de la foto original."""
+    src = CARPETA_FOTOS / animal / foto_name
+    dst = CARPETA_THUMBS / animal / (foto_name + ".jpg")
+    if not dst.exists() or dst.stat().st_mtime < mtime:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with Image.open(src) as img:
+                img.thumbnail((280, 280))
+                img.convert("RGB").save(dst, "JPEG", quality=72)
+        except Exception:
+            return ""
+    return base64.b64encode(dst.read_bytes()).decode()
+
+
+@st.cache_data(ttl=300)
+def datos_catalogo() -> pd.DataFrame:
+    """Animales + último peso + días abiertos + lote + etapa."""
+    base = leer_vista(V_CAT)
+    dias = leer_vista(V_DIAS)[["numero_visible", "dias_abiertos"]]
+    # v_dias_abiertos puede tener varias filas por animal -> queda la más reciente (menor dias_abiertos)
+    dias = dias.sort_values("dias_abiertos").drop_duplicates("numero_visible", keep="first")
+    peso = leer_vista(V_PESO)
+    peso_ultimo = (peso.sort_values("fecha_actual")
+                   .groupby("numero_visible", as_index=False)
+                   .tail(1)[["numero_visible", "peso_actual", "g_dia"]])
+    df = (base
+          .merge(dias, on="numero_visible", how="left")
+          .merge(peso_ultimo, on="numero_visible", how="left"))
+    return df
 
 FUENTES = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -98,6 +141,7 @@ ICONOS = {
 
 NAV = [
     ("resumen", "Resumen", "grid"),
+    ("animales", "Animales", "animal"),
     ("dias", "Días abiertos", "clock"),
     ("peso", "Peso", "scale"),
     ("produccion", "Producción", "drop"),
@@ -371,7 +415,27 @@ div[data-baseweb="select"] > div {
   .kpi .value { font-size:30px; }
   .estado-card .num { font-size:27px; }
   .ag-hoy { display:none; }
+  .ag-grid { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
 }
+
+/* ---------- catálogo Animales ---------- */
+.ag-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(185px,1fr)); gap:14px; margin:6px 0 20px; }
+.ag-card { display:block; background:var(--bone); border:1px solid var(--line);
+  border-radius:14px 14px 14px 4px; overflow:hidden; text-decoration:none!important;
+  color:var(--ink)!important; box-shadow:var(--sombra-sm);
+  transition:transform .15s, border-color .15s; }
+.ag-card:hover { transform:translateY(-3px); border-color:var(--pasture-2); }
+.ag-card-foto { height:130px; background:linear-gradient(165deg,#2B4A33,#16281B);
+  position:relative; }
+.ag-card-foto img { width:100%; height:100%; object-fit:cover; display:block; }
+.ag-card-foto .sin-foto { position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; color:rgba(250,246,236,.5); font-family:'IBM Plex Mono';
+  font-size:11px; letter-spacing:1px; }
+.ag-card-cuerpo { padding:10px 12px 11px; }
+.ag-card-chapeta { font-family:'IBM Plex Mono'; font-weight:700; font-size:13px; color:var(--ink); }
+.ag-card-estado { display:inline-block; font-size:9px; font-weight:700; letter-spacing:1px;
+  text-transform:uppercase; color:#fff; border-radius:999px; padding:3px 9px; margin-top:6px; }
+.ag-card-meta { font-size:11.5px; color:var(--ink-soft); margin-top:7px; line-height:1.4; }
 </style>
 """
 
@@ -816,7 +880,7 @@ NAV_JS = """
   s.id = 'ag-navfix';
   s.textContent =
     "document.addEventListener('click',function(e){" +
-    "var a=e.target&&e.target.closest?e.target.closest('a.ag-pill,a.ag-lchip'):null;" +
+    "var a=e.target&&e.target.closest?e.target.closest('a.ag-pill,a.ag-lchip,a.ag-card'):null;" +
     "if(a){e.preventDefault();window.location.href=a.getAttribute('href');}" +
     "},true);";
   d.head.appendChild(s);
@@ -1420,8 +1484,95 @@ def pagina_registrar_nota(lote: str | None) -> None:
                 conn.close()
 
 
+def pagina_animales(lote: str | None) -> None:
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Animales", ctx, "Catálogo completo del hato. Clic en una tarjeta para ver su ficha.")
+
+    qp = st.query_params
+    vaca_sel = qp.get("vaca")
+
+    df = datos_catalogo()
+    if lote:
+        df = df[df["nombre_lote"] == lote]
+
+    # Filtros
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        busqueda = st.text_input("Buscar por número", placeholder="Ej. 1013", key="busca_animal")
+    with col_f2:
+        estados = ["Todos"] + sorted(df["etapa_actual"].dropna().unique().tolist())
+        estado_sel = st.selectbox("Estado", estados, key="filtro_estado")
+
+    if busqueda:
+        df = df[df["numero_visible"].astype(str).str.contains(busqueda)]
+    if estado_sel != "Todos":
+        df = df[df["etapa_actual"] == estado_sel]
+
+    # KPIs
+    total = len(df)
+    con_foto = sum(1 for n in df["numero_visible"] if fotos_de(n))
+    criticas = sum(1 for n in df["numero_visible"]
+                   if pd.notna(df.loc[df["numero_visible"]==n, "dias_abiertos"].values[0])
+                   and df.loc[df["numero_visible"]==n, "dias_abiertos"].values[0] > UMBRAL_DIAS_ABIERTOS)
+    kpis(
+        {"etiqueta": "Animales", "valor": str(total), "acento": "pasture", "icono": ICONOS["animal"]},
+        {"etiqueta": "Con foto", "valor": str(con_foto), "acento": "moss", "icono": ICONOS["leaf"]},
+        {"etiqueta": "Por revisar", "valor": str(criticas), "acento": "iron", "icono": ICONOS["clock"]},
+    )
+
+# Detalle si se seleccionó una vaca
+    if vaca_sel:
+        animal = vaca_sel
+        if animal in df["numero_visible"].values:
+            lote_q = f"&lote={lote}" if lote else ""
+            st.markdown(
+                f'<a class="ag-pill captura" target="_self" href="?page=animales{lote_q}">← Volver al catálogo</a>',
+                unsafe_allow_html=True,
+            )
+            mostrar_ficha(animal)
+        else:
+            st.warning("Ese animal no coincide con los filtros actuales.")
+        return
+
+    # Grid de tarjetas (un solo markdown para que el DOM anide bien)
+    cards_html = []
+    for _, r in df.iterrows():
+        animal = r["numero_visible"]
+        fotos = fotos_de(animal)
+        thumb = ""
+        if fotos:
+            try:
+                mtime = fotos[0].stat().st_mtime
+                thumb = thumb_b64(animal, fotos[0].name, mtime)
+            except Exception:
+                thumb = ""
+        img_html = (
+            f'<img src="data:image/jpeg;base64,{thumb}" alt="Foto de {animal}">'
+            if thumb else
+            '<span class="sin-foto">Sin foto</span>'
+        )
+        color = color_etapa(r["etapa_actual"])
+        cards_html.append(
+            f'<a class="ag-card" target="_self" href="?page=animales&vaca={animal}{"" if not lote else f"&lote={lote}"}">'
+            f'<div class="ag-card-foto">{img_html}</div>'
+            f'<div class="ag-card-cuerpo">'
+            f'<div class="ag-card-chapeta">N.º {animal}</div>'
+            f'<span class="ag-card-estado" style="background:{color}">{r["etapa_actual"] or "—"}</span>'
+            f'<div class="ag-card-meta">'
+            f'Lote {r["nombre_lote"]} · '
+            f'{"Peso " + f"{r["peso_actual"]:.0f} kg" if pd.notna(r["peso_actual"]) else "—"}'
+            f'{f" · Días {int(r["dias_abiertos"])}" if pd.notna(r["dias_abiertos"]) else ""}'
+            f'</div></div></a>'
+        )
+    st.markdown(
+        '<div class="ag-grid">' + "".join(cards_html) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 PAGINAS = {
     "resumen": pagina_resumen,
+    "animales": pagina_animales,
     "dias": pagina_dias_abiertos,
     "peso": pagina_peso,
     "produccion": pagina_produccion,
