@@ -852,19 +852,6 @@ def ficha_vaca_html(animal: str, modo_edicion: bool = False) -> str | None:
             )
 
     lote_txt = f"Lote {d['lote']}" if d["lote"] else "AGRORDEN"
-
-    # Header actions (read-only mode)
-    if not modo_edicion:
-        header_actions = (
-            '<div class="ficha-acciones">'
-            f'<a class="ag-pill captura" href="?page=animales&vaca={animal}&edit=1">Editar</a>'
-            f'<a class="ag-pill" href="?page=animales">Volver</a>'
-            '</div>'
-        )
-    else:
-        header_actions = ""
-
-    lote_txt = f"Lote {d['lote']}" if d["lote"] else "AGRORDEN"
     return (
         CSS_FICHA
         + '<div class="ficha">'
@@ -887,11 +874,21 @@ def ficha_vaca_html(animal: str, modo_edicion: bool = False) -> str | None:
     )
 
 
-def mostrar_ficha(animal: str, modo_edicion: bool = False) -> None:
-    html = ficha_vaca_html(animal, modo_edicion)
+def mostrar_ficha(animal: str) -> None:
+    """Muestra la ficha del animal con botones nativos de Streamlit."""
+    html = ficha_vaca_html(animal)
     if html:
         st.markdown(html, unsafe_allow_html=True)
         components.html(LIGHTBOX_JS, height=0)
+    
+    # Botones nativos de Streamlit (fuera del HTML)
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("✏️ Editar", key=f"edit_{animal}", use_container_width=True):
+            st.query_params.update({"vaca": animal, "edit": "1"})
+            st.rerun()
+    with c2:
+        st.link_button("⬅️ Volver al catálogo", url="?page=animales")
 
 # --- UPDATE handlers ---
 def manejar_edicion_animal() -> None:
@@ -932,15 +929,79 @@ def pagina_editar_animal(lote: str | None) -> None:
         st.rerun()
         return
 
-    # Mostrar ficha en modo edición
-    html = ficha_vaca_html(animal, modo_edicion=True)
+    # Mostrar ficha en modo edición (solo datos, sin botones)
+    html = ficha_vaca_html(animal)
     if html:
         st.markdown(html, unsafe_allow_html=True)
         components.html(LIGHTBOX_JS, height=0)
 
-    # Procesar guardado
-    if qp.get("save") == "1":
-        manejar_edicion_animal()
+    # Formulario de edición nativo
+    d = datos_ficha(animal)
+    with st.form(f"edit_form_{animal}", clear_on_submit=False):
+        st.markdown("### ✏️ Editar animal")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            nombre = st.text_input("Nombre", value=d.get("nombre") or "", key=f"edit_nom_{animal}")
+            etapa = st.selectbox("Estado", ["ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA", "TERNERA", "TERNEROS"],
+                                 index=["ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA", "TERNERA", "TERNEROS"].index(d.get("etapa", "ORDEÑO")), key=f"edit_etapa_{animal}")
+            sexo = st.selectbox("Sexo", ["F", "M"], index=["F", "M"].index(d.get("sexo", "F")), key=f"edit_sexo_{animal}")
+            fecha_nac = st.date_input("Fecha nacimiento", value=d.get("fecha_nacimiento") or None, key=f"edit_fn_{animal}")
+        with col2:
+            raza = st.selectbox("Raza", [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"],
+                               index=([""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]).index(d.get("raza", "")), key=f"edit_raza_{animal}")
+            lote_sel = st.selectbox("Lote", [""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"],
+                                   index=([""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]).index(d.get("nombre_lote", "") or ""), key=f"edit_lote_{animal}")
+            madre = st.selectbox("Madre", [""] + obtener_animales_ordenados(),
+                                index=([""] + obtener_animales_ordenados()).index(d.get("id_madre") or "") if d.get("id_madre") else 0, key=f"edit_madre_{animal}")
+            caracteristicas = st.text_area("Características", value=d.get("caracteristicas") or "", key=f"edit_caract_{animal}")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            guardar = st.form_submit_button("Guardar cambios", type="primary")
+        with c2:
+            cancelar = st.form_submit_button("Cancelar")
+
+        if guardar:
+            # Actualizar en BD
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    # Obtener id_madre si se seleccionó
+                    id_madre = None
+                    if madre:
+                        cur.execute("SELECT id_interno FROM animales WHERE numero_visible = %s", (madre,))
+                        row = cur.fetchone()
+                        if row:
+                            id_madre = row[0]
+                    
+                    cur.execute(SQL_UPDATE_ANIMAL, (
+                        d.get("etapa") or "ORDEÑO",  # etapa_actual
+                        lote_sel if lote_sel else None,  # nombre_lote
+                        sexo,
+                        fecha_nac if fecha_nac else None,
+                        raza if raza else None,
+                        caracteristicas if caracteristicas else None,
+                        id_madre,
+                        None,  # foto_principal - mantener la actual
+                        animal
+                    ))
+                conn.commit()
+                leer_vista.clear()
+                st.success(f"Animal {animal} actualizado correctamente")
+                # Limpiar query params y volver a vista normal
+                st.query_params.clear()
+                st.query_params.update({"page": "animales"})
+                st.rerun()
+            except Exception as e:
+                conn.rollback()
+                st.error(f"Error al actualizar: {e}")
+            finally:
+                conn.close()
+        elif cancelar:
+            st.query_params.clear()
+            st.query_params.update({"page": "animales"})
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -1706,25 +1767,17 @@ def pagina_animales(lote: str | None) -> None:
         {"etiqueta": "Por revisar", "valor": str(criticas), "acento": "iron", "icono": ICONOS["clock"]},
     )
 
-    # Modo edición de ficha
+# Modo edición de ficha
     if vaca_sel:
         animal = vaca_sel
         if animal in df["numero_visible"].values:
-            lote_q = f"&lote={lote}" if lote else ""
-            st.markdown(
-                f'<a class="ag-pill captura" target="_self" href="?page=animales{lote_q}">← Volver al catálogo</a>',
-                unsafe_allow_html=True,
-            )
             if qp.get("edit") == "1":
-                html = ficha_vaca_html(vaca_sel, modo_edicion=True)
-                if html:
-                    st.markdown(html, unsafe_allow_html=True)
-                    components.html(LIGHTBOX_JS, height=0)
-                # Procesar guardado
-                if qp.get("save") == "1":
-                    manejar_edicion_animal()
+                # Redirigir a página de edición
+                st.query_params.update({"page": "editar_animal"})
+                st.rerun()
             else:
-                mostrar_ficha(vaca_sel)
+                # Modo lectura: ficha + botones nativos
+                mostrar_ficha(animal)
         else:
             st.warning("Ese animal no coincide con los filtros actuales.")
         return
