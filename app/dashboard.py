@@ -392,6 +392,12 @@ button[kind="primaryFormSubmit"]:hover, button[kind="primary"]:hover {
 button:focus-visible { outline:none !important;
   box-shadow:0 0 0 3px rgba(34,64,44,.25) !important; }
 
+/* ---------- ficha buttons alignment ---------- */
+.ficha-acciones { display:flex; gap:8px; margin:16px 0 8px 0; flex-wrap:wrap; }
+.ficha-acciones .stButton, .ficha-acciones .stLinkButton { flex:1; min-width:120px; }
+.ficha-acciones .stButton > button, .ficha-acciones .stLinkButton > a {
+  width:100%; justify-content:center; }
+
 /* ---------- inputs ---------- */
 [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea, [data-testid="stDateInput"] input {
@@ -900,15 +906,33 @@ def manejar_edicion_animal() -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Obtener id_lote si se proporcionó
+            id_lote = None
+            lote_nombre = qp.get("nombre_lote", "")
+            if lote_nombre:
+                cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (lote_nombre,))
+                row = cur.fetchone()
+                if row:
+                    id_lote = row[0]
+
+            # Obtener id_madre si se proporcionó
+            id_madre = None
+            id_madre_str = qp.get("id_madre", "")
+            if id_madre_str:
+                cur.execute("SELECT id_interno FROM animales WHERE id_interno = %s", (id_madre_str,))
+                row = cur.fetchone()
+                if row:
+                    id_madre = row[0]
+
             cur.execute(SQL_UPDATE_ANIMAL, (
                 qp.get("nombre", ""),
                 qp.get("etapa", "ORDEÑO"),
-                qp.get("nombre_lote", ""),
+                id_lote,
                 qp.get("sexo", "F"),
                 qp.get("fecha_nacimiento") or None,
                 qp.get("raza", ""),
                 qp.get("caracteristicas", ""),
-                qp.get("id_madre") or None,
+                id_madre,
                 qp.get("foto_principal") or None,
                 animal
             ))
@@ -967,6 +991,14 @@ def pagina_editar_animal(lote: str | None) -> None:
             conn = get_connection()
             try:
                 with conn.cursor() as cur:
+                    # Obtener id_lote si se seleccionó
+                    id_lote = None
+                    if lote_sel:
+                        cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (lote_sel,))
+                        row = cur.fetchone()
+                        if row:
+                            id_lote = row[0]
+
                     # Obtener id_madre si se seleccionó
                     id_madre = None
                     if madre:
@@ -974,10 +1006,10 @@ def pagina_editar_animal(lote: str | None) -> None:
                         row = cur.fetchone()
                         if row:
                             id_madre = row[0]
-                    
+
                     cur.execute(SQL_UPDATE_ANIMAL, (
                         d.get("etapa") or "ORDEÑO",  # etapa_actual
-                        lote_sel if lote_sel else None,  # nombre_lote
+                        id_lote,  # id_lote_actual
                         sexo,
                         fecha_nac if fecha_nac else None,
                         raza if raza else None,
@@ -1508,19 +1540,20 @@ SQL_UPDATE_ANIMAL = """
     UPDATE animales SET
         nombre = %s,
         etapa_actual = %s,
-        nombre_lote = %s,
+        id_lote_actual = %s,
         sexo = %s,
         fecha_nacimiento = %s,
         raza = %s,
         caracteristicas = %s,
         id_madre = %s,
-        foto_principal = %s
+        foto_principal = %s,
+        updated_at = NOW()
     WHERE numero_visible = %s
 """
 
 SQL_INSERT_ANIMAL = """
     INSERT INTO animales (
-        numero_visible, nombre, etapa_actual, nombre_lote, sexo,
+        numero_visible, nombre, etapa_actual, id_lote_actual, sexo,
         fecha_nacimiento, raza, caracteristicas, id_madre, foto_principal
     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     RETURNING id_interno
@@ -1705,6 +1738,14 @@ def pagina_nueva_vaca(lote: str | None) -> None:
                         st.error(f"Ya existe un animal con número {numero}")
                         return
 
+                    # Obtener id_lote si se seleccionó
+                    id_lote = None
+                    if lote_sel:
+                        cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (lote_sel,))
+                        row = cur.fetchone()
+                        if row:
+                            id_lote = row[0]
+
                     # Obtener id_madre si se seleccionó
                     id_madre = None
                     if madre:
@@ -1713,10 +1754,23 @@ def pagina_nueva_vaca(lote: str | None) -> None:
                         if row:
                             id_madre = row[0]
 
+                    # Procesar foto si hay
+                    foto_b64 = None
+                    if foto:
+                        try:
+                            img = Image.open(foto)
+                            img.thumbnail((800, 800))
+                            buf = io.BytesIO()
+                            img.save(buf, format="JPEG", quality=85)
+                            foto_b64 = base64.b64encode(buf.getvalue()).decode()
+                        except Exception as e:
+                            st.error(f"Error procesando imagen: {e}")
+                            return
+
                     cur.execute(SQL_INSERT_ANIMAL, (
-                        numero, None, etapa, lote if lote else None, sexo,
+                        numero, nombre, etapa, id_lote, sexo,
                         fecha_nac if fecha_nac else None, raza or None,
-                        "", None, None
+                        caracteristicas or "", id_madre, foto_b64
                     ))
                     nuevo_id = cur.fetchone()[0]
                 conn.commit()
