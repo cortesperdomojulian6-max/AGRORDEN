@@ -152,6 +152,7 @@ NAV = [
     ("pesaje", "+ Pesaje", "plus"),
     ("repro", "+ Repro", "heart"),
     ("nota", "+ Nota", "pen"),
+    ("nueva_vaca", "+ Vaca", "plus"),
 ]
 
 CSS_GLOBAL = """
@@ -777,7 +778,7 @@ def datos_ficha(animal: str) -> dict:
     }
 
 
-def ficha_vaca_html(animal: str) -> str | None:
+def ficha_vaca_html(animal: str, modo_edicion: bool = False) -> str | None:
     fotos = fotos_de(animal)
     d = datos_ficha(animal)
     if not fotos and d["etapa"] is None:
@@ -851,6 +852,19 @@ def ficha_vaca_html(animal: str) -> str | None:
             )
 
     lote_txt = f"Lote {d['lote']}" if d["lote"] else "AGRORDEN"
+
+    # Header actions (read-only mode)
+    if not modo_edicion:
+        header_actions = (
+            '<div class="ficha-acciones">'
+            f'<a class="ag-pill captura" href="?page=animales&vaca={animal}&edit=1">Editar</a>'
+            f'<a class="ag-pill" href="?page=animales">Volver</a>'
+            '</div>'
+        )
+    else:
+        header_actions = ""
+
+    lote_txt = f"Lote {d['lote']}" if d["lote"] else "AGRORDEN"
     return (
         CSS_FICHA
         + '<div class="ficha">'
@@ -873,11 +887,60 @@ def ficha_vaca_html(animal: str) -> str | None:
     )
 
 
-def mostrar_ficha(animal: str) -> None:
-    html = ficha_vaca_html(animal)
+def mostrar_ficha(animal: str, modo_edicion: bool = False) -> None:
+    html = ficha_vaca_html(animal, modo_edicion)
     if html:
         st.markdown(html, unsafe_allow_html=True)
         components.html(LIGHTBOX_JS, height=0)
+
+# --- UPDATE handlers ---
+def manejar_edicion_animal() -> None:
+    qp = st.query_params
+    animal = qp.get("vaca")
+    if not animal or qp.get("save") != "1":
+        return
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(SQL_UPDATE_ANIMAL, (
+                qp.get("nombre", ""),
+                qp.get("etapa", "ORDEÑO"),
+                qp.get("nombre_lote", ""),
+                qp.get("sexo", "F"),
+                qp.get("fecha_nacimiento") or None,
+                qp.get("raza", ""),
+                qp.get("caracteristicas", ""),
+                qp.get("id_madre") or None,
+                qp.get("foto_principal") or None,
+                animal
+            ))
+        conn.commit()
+        leer_vista.clear()
+        st.success(f"Animal {animal} actualizado correctamente")
+        st.rerun()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error al actualizar: {e}")
+    finally:
+        conn.close()
+
+def pagina_editar_animal(lote: str | None) -> None:
+    qp = st.query_params
+    animal = qp.get("vaca")
+    if not animal or qp.get("edit") != "1":
+        st.rerun()
+        return
+
+    # Mostrar ficha en modo edición
+    html = ficha_vaca_html(animal, modo_edicion=True)
+    if html:
+        st.markdown(html, unsafe_allow_html=True)
+        components.html(LIGHTBOX_JS, height=0)
+
+    # Procesar guardado
+    if qp.get("save") == "1":
+        manejar_edicion_animal()
 
 
 # ---------------------------------------------------------------------------
@@ -1379,6 +1442,34 @@ SQL_INSERT_NOTA = """
     RETURNING id
 """
 
+# --- UPDATE (Fase D: editar animal + VENDIDA + alta con imagen) ---
+SQL_UPDATE_ANIMAL = """
+    UPDATE animales SET
+        nombre = %s,
+        etapa_actual = %s,
+        nombre_lote = %s,
+        sexo = %s,
+        fecha_nacimiento = %s,
+        raza = %s,
+        caracteristicas = %s,
+        id_madre = %s,
+        foto_principal = %s
+    WHERE numero_visible = %s
+"""
+
+SQL_INSERT_ANIMAL = """
+    INSERT INTO animales (
+        numero_visible, nombre, etapa_actual, nombre_lote, sexo,
+        fecha_nacimiento, raza, caracteristicas, id_madre, foto_principal
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id_interno
+"""
+
+TIPOS_EVENTO_REPRO = [
+    "Parto", "Monta", "Servicio", "Diagnóstico de Preñez",
+    "Celo Posparto", "Secado"
+]
+
 TIPOS_EVENTO_REPRO = [
     "Parto", "Monta", "Servicio", "Diagnóstico de Preñez",
     "Celo Posparto", "Secado"
@@ -1499,12 +1590,92 @@ def pagina_registrar_nota(lote: str | None) -> None:
                 conn.close()
 
 
+def pagina_nueva_vaca(lote: str | None) -> None:
+    ctx = f"Lote · {lote}" if lote else "Todos los lotes"
+    cabecera("Nueva vaca", ctx,
+             "Registrar una nueva vaca en el hato con su foto y datos completos.")
+
+    animales = obtener_animales_ordenados()
+    etapas = ["TERNERA", "TERNEROS", "ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA"]
+    sexos = ["F", "M"]
+    lotes = ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]
+    razas = ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
+
+    with st.form("form_nueva_vaca", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            numero = st.text_input("Número visible (chapeta) *", placeholder="Ej. 10131", key="nv_numero")
+            nombre = st.text_input("Nombre", key="nv_nombre")
+            etapa = st.selectbox("Estado *", etapas, key="nv_etapa")
+            sexo = st.selectbox("Sexo *", sexos, key="nv_sexo")
+            fecha_nac = st.date_input("Fecha de nacimiento", key="nv_fecha_nac")
+        with col2:
+            raza = st.selectbox("Raza", [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"], key="nv_raza")
+            lote_sel = st.selectbox("Lote", [""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"], key="nv_lote")
+            madre = st.selectbox("Madre (opcional)", [""] + obtener_animales_ordenados(), key="nv_madre")
+            foto = st.file_uploader("Foto (opcional)", type=["jpg", "jpeg", "png"], key="nv_foto")
+            caracteristicas = st.text_area("Características / notas", key="nv_caract")
+
+        enviado = st.form_submit_button("Registrar vaca", type="primary")
+
+    if enviado:
+        if not numero or not etapa:
+            st.error("Número y estado son obligatorios")
+        else:
+            # Procesar foto si hay
+            foto_b64 = None
+            if foto:
+                try:
+                    img = Image.open(foto)
+                    img.thumbnail((800, 800))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=85)
+                    foto_b64 = base64.b64encode(buf.getvalue()).decode()
+                except Exception as e:
+                    st.error(f"Error procesando imagen: {e}")
+                    return
+
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    # Verificar que no existe
+                    cur.execute("SELECT 1 FROM animales WHERE numero_visible = %s", (numero,))
+                    if cur.fetchone():
+                        st.error(f"Ya existe un animal con número {numero}")
+                        return
+
+                    # Obtener id_madre si se seleccionó
+                    id_madre = None
+                    if madre:
+                        cur.execute("SELECT id_interno FROM animales WHERE numero_visible = %s", (madre,))
+                        row = cur.fetchone()
+                        if row:
+                            id_madre = row[0]
+
+                    cur.execute(SQL_INSERT_ANIMAL, (
+                        numero, None, etapa, lote if lote else None, sexo,
+                        fecha_nac if fecha_nac else None, raza or None,
+                        "", None, None
+                    ))
+                    nuevo_id = cur.fetchone()[0]
+                conn.commit()
+                leer_vista.clear()
+                st.success(f"Vaca registrada correctamente (N.º {numero})")
+                st.rerun()
+            except Exception as e:
+                conn.rollback()
+                st.error(f"Error al registrar: {e}")
+            finally:
+                conn.close()
+
+
 def pagina_animales(lote: str | None) -> None:
     ctx = f"Lote · {lote}" if lote else "Todos los lotes"
     cabecera("Animales", ctx, "Catálogo completo del hato. Clic en una tarjeta para ver su ficha.")
 
     qp = st.query_params
     vaca_sel = qp.get("vaca")
+    edit_mode = qp.get("edit") == "1"
 
     df = datos_catalogo()
     if lote:
@@ -1535,7 +1706,7 @@ def pagina_animales(lote: str | None) -> None:
         {"etiqueta": "Por revisar", "valor": str(criticas), "acento": "iron", "icono": ICONOS["clock"]},
     )
 
-# Detalle si se seleccionó una vaca
+    # Modo edición de ficha
     if vaca_sel:
         animal = vaca_sel
         if animal in df["numero_visible"].values:
@@ -1544,7 +1715,16 @@ def pagina_animales(lote: str | None) -> None:
                 f'<a class="ag-pill captura" target="_self" href="?page=animales{lote_q}">← Volver al catálogo</a>',
                 unsafe_allow_html=True,
             )
-            mostrar_ficha(animal)
+            if qp.get("edit") == "1":
+                html = ficha_vaca_html(vaca_sel, modo_edicion=True)
+                if html:
+                    st.markdown(html, unsafe_allow_html=True)
+                    components.html(LIGHTBOX_JS, height=0)
+                # Procesar guardado
+                if qp.get("save") == "1":
+                    manejar_edicion_animal()
+            else:
+                mostrar_ficha(vaca_sel)
         else:
             st.warning("Ese animal no coincide con los filtros actuales.")
         return
@@ -1594,6 +1774,8 @@ PAGINAS = {
     "pesaje": pagina_registrar_peso,
     "repro": pagina_registrar_repro,
     "nota": pagina_registrar_nota,
+    "editar_animal": pagina_editar_animal,
+    "nueva_vaca": pagina_nueva_vaca,
 }
 
 
