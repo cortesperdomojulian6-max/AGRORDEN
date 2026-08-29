@@ -398,6 +398,11 @@ button:focus-visible { outline:none !important;
 .ficha-acciones .stButton > button, .ficha-acciones .stLinkButton > a {
   width:100%; justify-content:center; }
 
+/* ---------- form buttons alignment (edit form) ---------- */
+[data-testid="stForm"] .stButton { width:100%; }
+[data-testid="stForm"] .stButton > button { width:100%; }
+.stFormSubmitButton > button { width:100%; }
+
 /* ---------- inputs ---------- */
 [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
 [data-testid="stTextArea"] textarea, [data-testid="stDateInput"] input {
@@ -784,7 +789,33 @@ def datos_ficha(animal: str) -> dict:
     }
 
 
-def ficha_vaca_html(animal: str, modo_edicion: bool = False) -> str | None:
+def _safe_index(opts: list[str], value: str, default: str) -> int:
+    """Safe index lookup with fallback to default."""
+    try:
+        return opts.index(value)
+    except ValueError:
+        return opts.index(default) if default in opts else 0
+
+
+def _get_etapas_options() -> list[str]:
+    """All known etapa values from DB + new ones."""
+    return [
+        "ORDE�O", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR",
+        "VENDIDA", "TERNERA", "TERNEROS",
+        "NOVILLA (H)", "NOVILLA HORRA", "NOVILLA VACIA",
+        "VACA HORRA", "VACA VACIA", "POSIBLE PREÑEZ", "REPRODUCTOR "
+    ]
+
+def obtener_animales_ordenados() -> list[str]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT numero_visible FROM animales WHERE etapa_actual != 'VENDIDA' ORDER BY numero_visible")
+            return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+def ficha_vaca_html(animal: str) -> str | None:
     fotos = fotos_de(animal)
     d = datos_ficha(animal)
     if not fotos and d["etapa"] is None:
@@ -967,17 +998,20 @@ def pagina_editar_animal(lote: str | None) -> None:
         col1, col2 = st.columns(2)
         with col1:
             nombre = st.text_input("Nombre", value=d.get("nombre") or "", key=f"edit_nom_{animal}")
-            etapa = st.selectbox("Estado", ["ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA", "TERNERA", "TERNEROS"],
-                                 index=["ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA", "TERNERA", "TERNEROS"].index(d.get("etapa", "ORDEÑO")), key=f"edit_etapa_{animal}")
-            sexo = st.selectbox("Sexo", ["F", "M"], index=["F", "M"].index(d.get("sexo", "F")), key=f"edit_sexo_{animal}")
+            etapas_opts = _get_etapas_options()
+            etapa = st.selectbox("Estado", etapas_opts,
+                                 index=_safe_index(etapas_opts, d.get("etapa", ""), "ORDEÑO"), key=f"edit_etapa_{animal}")
+            sexo = st.selectbox("Sexo", ["F", "M"], index=_safe_index(["F", "M"], d.get("sexo", "F"), "F"), key=f"edit_sexo_{animal}")
             fecha_nac = st.date_input("Fecha nacimiento", value=d.get("fecha_nacimiento") or None, key=f"edit_fn_{animal}")
         with col2:
-            raza = st.selectbox("Raza", [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"],
-                               index=([""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]).index(d.get("raza", "")), key=f"edit_raza_{animal}")
-            lote_sel = st.selectbox("Lote", [""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"],
-                                   index=([""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]).index(d.get("nombre_lote", "") or ""), key=f"edit_lote_{animal}")
-            madre = st.selectbox("Madre", [""] + obtener_animales_ordenados(),
-                                index=([""] + obtener_animales_ordenados()).index(d.get("id_madre") or "") if d.get("id_madre") else 0, key=f"edit_madre_{animal}")
+            raza_opts = [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
+            raza = st.selectbox("Raza", raza_opts, index=_safe_index(raza_opts, d.get("raza", ""), ""), key=f"edit_raza_{animal}")
+            lotes_opts = [""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]
+            lote_sel = st.selectbox("Lote", lotes_opts,
+                                   index=_safe_index(lotes_opts, d.get("nombre_lote", "") or "", ""), key=f"edit_lote_{animal}")
+            madre_opts = [""] + obtener_animales_ordenados()
+            madre = st.selectbox("Madre", madre_opts,
+                                 index=_safe_index(madre_opts, d.get("id_madre") or "", ""), key=f"edit_madre_{animal}")
             caracteristicas = st.text_area("Características", value=d.get("caracteristicas") or "", key=f"edit_caract_{animal}")
 
         c1, c2 = st.columns(2)
