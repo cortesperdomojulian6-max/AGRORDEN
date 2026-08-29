@@ -1724,18 +1724,19 @@ def pagina_nueva_vaca(lote: str | None) -> None:
              "Registrar una nueva vaca en el hato con su foto y datos completos.")
 
     animales = obtener_animales_ordenados()
-    etapas = ["TERNERA", "TERNEROS", "ORDEÑO", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR", "VENDIDA"]
+    etapas_opts = _get_etapas_options()
     sexos = ["F", "M"]
-    lotes = ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]
-    razas = ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
+    lotes_opts = [""] + ["Ordeño", "Levante", "Silvo", "Mamon", "Secado", "Secado M"]
+    razas = [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
 
     with st.form("form_nueva_vaca", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             numero = st.text_input("Número visible (chapeta) *", placeholder="Ej. 10131", key="nv_numero")
             nombre = st.text_input("Nombre", key="nv_nombre")
-            etapa = st.selectbox("Estado *", etapas, key="nv_etapa")
-            sexo = st.selectbox("Sexo *", sexos, key="nv_sexo")
+            etapa = st.selectbox("Estado *", _get_etapas_options(),
+                                 index=_safe_index(_get_etapas_options(), "TERNERA"), key="nv_etapa")
+            sexo = st.selectbox("Sexo *", ["F", "M"], key="nv_sexo")
             fecha_nac = st.date_input("Fecha de nacimiento", key="nv_fecha_nac")
         with col2:
             raza = st.selectbox("Raza", [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"], key="nv_raza")
@@ -1744,25 +1745,12 @@ def pagina_nueva_vaca(lote: str | None) -> None:
             foto = st.file_uploader("Foto (opcional)", type=["jpg", "jpeg", "png"], key="nv_foto")
             caracteristicas = st.text_area("Características / notas", key="nv_caract")
 
-        enviado = st.form_submit_button("Registrar vaca", type="primary")
+        enviado = st.form_submit_button("Registrar vaca", type="primary", use_container_width=True)
 
     if enviado:
         if not numero or not etapa:
             st.error("Número y estado son obligatorios")
         else:
-            # Procesar foto si hay
-            foto_b64 = None
-            if foto:
-                try:
-                    img = Image.open(foto)
-                    img.thumbnail((800, 800))
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=85)
-                    foto_b64 = base64.b64encode(buf.getvalue()).decode()
-                except Exception as e:
-                    st.error(f"Error procesando imagen: {e}")
-                    return
-
             conn = get_connection()
             try:
                 with conn.cursor() as cur:
