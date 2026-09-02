@@ -64,6 +64,7 @@ V_CAT = """
            COALESCE(l.nombre_lote,'(sin lote)') AS nombre_lote
     FROM animales a
     LEFT JOIN lotes l ON l.id_lote = a.id_lote_actual
+    {filtro}
     ORDER BY a.numero_visible
 """
 
@@ -88,9 +89,17 @@ def thumb_b64(animal: str, foto_name: str, mtime: float) -> str:
 
 
 @st.cache_data(ttl=300)
-def datos_catalogo() -> pd.DataFrame:
-    """Animales + último peso + días abiertos + lote + etapa."""
-    base = leer_vista(V_CAT)
+def datos_catalogo(mostrar_vendidas: bool = False) -> pd.DataFrame:
+    """Animales + último peso + días abiertos + lote + etapa.
+
+    Por omisión excluye animales marcados VENDIDA; con mostrar_vendidas=True
+    los incluye (histórico / para revertir una venta).
+    """
+    filtre_venta = (
+        "" if mostrar_vendidas
+        else "WHERE a.etapa_actual IS DISTINCT FROM 'VENDIDA'"
+    )
+    base = leer_vista(V_CAT.format(filtro=filtre_venta))
     dias = leer_vista(V_DIAS)[["numero_visible", "dias_abiertos"]]
     # v_dias_abiertos puede tener varias filas por animal -> queda la más reciente (menor dias_abiertos)
     dias = dias.sort_values("dias_abiertos").drop_duplicates("numero_visible", keep="first")
@@ -375,28 +384,70 @@ h2, h3 { font-family:'Fraunces', Georgia, serif !important; color:var(--ink) !im
 /* ---------- botones ---------- */
 button[kind="primaryFormSubmit"], button[kind="primary"] {
   background:var(--pasture) !important; color:#FAF6EC !important;
-  border:1px solid var(--pasture) !important; font-weight:600 !important;
+  border:none !important; font-weight:600 !important;
   font-family:'IBM Plex Sans',sans-serif !important; font-size:14px !important;
-  border-radius:11px 11px 11px 4px !important; padding:8px 18px !important;
-  transition:background .16s ease; }
+  border-radius:10px !important; padding:10px 20px !important;
+  min-height:44px !important;
+  box-shadow:0 2px 8px rgba(36,92,69,.25) !important;
+  transition:all .2s ease !important; letter-spacing:.3px !important; }
 button[kind="primaryFormSubmit"]:hover, button[kind="primary"]:hover {
-  background:var(--pasture-2) !important; border-color:var(--pasture-2) !important; }
+  background:#1B4332 !important; border-color:#1B4332 !important;
+  box-shadow:0 4px 16px rgba(36,92,69,.35) !important;
+  transform:translateY(-1px) !important; }
+button[kind="primaryFormSubmit"]:active, button[kind="primary"]:active {
+  transform:translateY(0) !important;
+  box-shadow:0 1px 4px rgba(36,92,69,.2) !important; }
+
 .stDownloadButton button, .stButton button {
   background:var(--bone) !important; color:var(--ink) !important;
-  border:1px solid var(--line) !important; font-weight:600 !important;
+  border:1.5px solid var(--line) !important; font-weight:500 !important;
   font-family:'IBM Plex Sans',sans-serif !important; font-size:13.5px !important;
-  border-radius:11px 11px 11px 4px !important; padding:7px 15px !important;
-  transition:border-color .16s ease, background .16s ease; }
+  border-radius:10px !important; padding:9px 18px !important;
+  min-height:44px !important;
+  transition:all .2s ease !important; }
 .stDownloadButton button:hover, .stButton button:hover {
-  border-color:var(--pasture) !important; color:var(--pasture) !important; }
+  border-color:var(--pasture) !important; color:var(--pasture) !important;
+  background:var(--pasture-soft) !important;
+  box-shadow:0 2px 8px rgba(36,92,69,.12) !important; }
 button:focus-visible { outline:none !important;
   box-shadow:0 0 0 3px rgba(34,64,44,.25) !important; }
 
-/* ---------- ficha buttons alignment ---------- */
-.ficha-acciones { display:flex; gap:8px; margin:16px 0 8px 0; flex-wrap:wrap; }
-.ficha-acciones .stButton, .ficha-acciones .stLinkButton { flex:1; min-width:120px; }
+/* ---------- ficha buttons ---------- */
+.ficha-acciones { display:flex; gap:10px; margin:0 auto 14px auto;
+  max-width:760px; flex-direction:column; }
+.ficha-acciones .stButton, .ficha-acciones .stLinkButton { flex:1 1 auto; }
 .ficha-acciones .stButton > button, .ficha-acciones .stLinkButton > a {
-  width:100%; justify-content:center; }
+  width:100%; min-height:44px; font-size:14px; font-weight:600;
+  border-radius:10px !important; }
+/* Editar: borde sutil con icono */
+.ficha-acciones .stButton:nth-child(1) > button {
+  background:var(--bone) !important; color:var(--ink) !important;
+  border:1.5px solid var(--line) !important;
+  box-shadow:none !important; }
+.ficha-acciones .stButton:nth-child(1) > button:hover {
+  border-color:var(--pasture) !important; color:var(--pasture) !important;
+  background:var(--pasture-soft) !important; }
+/* Vender/Reactivar: acento cálido */
+.ficha-acciones .stButton:nth-child(2) > button {
+  background:var(--earth) !important; color:#FFF8EA !important;
+  border:none !important;
+  box-shadow:0 2px 8px rgba(138,106,69,.25) !important; }
+.ficha-acciones .stButton:nth-child(2) > button:hover {
+  background:#6E5030 !important;
+  box-shadow:0 4px 16px rgba(138,106,69,.35) !important; }
+/* Volver: minimalista */
+.ficha-acciones .stLinkButton > a {
+  background:transparent !important; color:var(--ink-soft) !important;
+  border:1px dashed var(--line) !important;
+  box-shadow:none !important; font-weight:500 !important; }
+.ficha-acciones .stLinkButton > a:hover {
+  color:var(--ink) !important; border-color:var(--ink-soft) !important;
+  background:var(--hide) !important; }
+
+/* ---------- dialogs ---------- */
+[data-testid="stDialog"] { border-radius:16px !important; overflow:hidden; }
+[data-testid="stDialog"] .stMarkdown p { font-size:15px !important; line-height:1.6; }
+[data-testid="stDialog"] .stCaption { font-size:13px !important; color:var(--ink-soft); }
 
 /* ---------- form buttons alignment (edit form) ---------- */
 [data-testid="stForm"] .stButton { width:100%; }
@@ -437,13 +488,82 @@ div[data-baseweb="select"] > div {
   border-radius:12px 12px 12px 4px; overflow:hidden; margin-bottom:12px; }
 .js-plotly-plot .plotly .modebar { background:transparent !important; }
 
+/* ---------- bottom nav mobile ---------- */
+.ag-bottom-nav { display:none; }
+
 @media (max-width:720px) {
-  .block-container { padding-top:0.8rem; }
+  .block-container { padding-top:0.8rem; padding-bottom:5.5rem; }
   .kpi .value { font-size:30px; }
   .estado-card .num { font-size:27px; }
   .ag-hoy { display:none; }
-  .ag-grid { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+  .ag-grid { grid-template-columns:1fr; gap:10px; }
+  .ag-card { display:flex; flex-direction:row; height:auto; }
+  .ag-card-foto { width:90px; height:90px; flex:0 0 90px; }
+  .ag-card-cuerpo { padding:10px 12px; display:flex; flex-direction:column; justify-content:center; }
+  .ag-card-estado { margin-top:4px; }
+  .ag-card-meta { margin-top:4px; font-size:11px; }
+  .ficha-acciones { flex-direction:column; gap:6px; }
+  .ficha-acciones .stButton, .ficha-acciones .stLinkButton { flex:1 1 auto; }
+  .ficha-acciones .stButton > button, .ficha-acciones .stLinkButton > a {
+    min-height:44px; font-size:15px; }
+  .ag-top { display:none; }
+  .ag-bottom-nav { display:flex; position:fixed; bottom:0; left:0; right:0;
+    z-index:90; background:rgba(255,253,246,.97); backdrop-filter:blur(10px);
+    border-top:2px solid var(--pasture); padding:6px 0 env(safe-area-inset-bottom,6px);
+    box-shadow:0 -4px 20px rgba(33,28,22,.10); }
+  .ag-bottom-nav a { display:flex; flex-direction:column; align-items:center; gap:3px;
+    flex:1; text-decoration:none!important; color:var(--ink-soft)!important;
+    font-family:'IBM Plex Sans',sans-serif; font-size:10px; font-weight:600;
+    padding:6px 2px 4px; min-height:44px; justify-content:center; }
+  .ag-bottom-nav a svg { width:20px; height:20px; }
+  .ag-bottom-nav a.activa { color:var(--pasture)!important; }
+  .ag-bottom-nav a.activa svg { stroke:var(--pasture); }
+  .ag-bottom-nav .ag-nav-sep { display:none; }
 }
+
+@media (max-width:480px) {
+  .block-container { padding-left:12px; padding-right:12px; }
+  .kpi-grid { grid-template-columns:1fr; }
+  .kpi { padding:14px 14px 12px; }
+  .estado-grid { grid-template-columns:1fr; }
+  .pg-head .t { font-size:22px; }
+  .ag-card-foto { width:80px; height:80px; flex:0 0 80px; }
+  .ag-card-chapeta { font-size:12px; }
+  .ficha-hero { height:clamp(160px, 50vw, 240px); }
+  .ficha-cuerpo { padding:14px 14px 12px; }
+  .fstat { flex:1 1 44%; padding:8px 10px; }
+  .fstat .v { font-size:17px; }
+  .chip-parto { min-width:100px; padding:7px 10px 6px 16px; font-size:11px; }
+}
+
+@media (max-width:360px) {
+  .ag-bottom-nav a { font-size:9px; }
+  .ag-bottom-nav a svg { width:18px; height:18px; }
+  .ficha-stats { flex-direction:column; }
+  .fstat { flex:1 1 100%; }
+}
+
+/* ---------- alertas ---------- */
+.alerta { display:flex; align-items:center; gap:12px; padding:12px 14px;
+  border-radius:10px; margin-bottom:8px; transition:transform .15s ease; }
+.alerta:hover { transform:translateX(4px); }
+.alerta-icono { font-size:22px; flex:0 0 32px; text-align:center; }
+.alerta-cuerpo { flex:1; min-width:0; }
+.alerta-titulo { font-size:14px; font-weight:600; color:var(--ink); }
+.alerta-sub { font-size:12px; color:var(--ink-soft); margin-top:2px; }
+.alerta-chapeta { font-family:'IBM Plex Mono',monospace; font-size:11px; font-weight:700;
+  background:var(--bone); border:1px solid var(--line);
+  border-radius:8px; padding:4px 8px; white-space:nowrap; color:var(--ink); }
+.alerta-urgente { background:#FFF0F0; border-left:4px solid #C0392B; }
+.alerta-urgente .alerta-titulo { color:#922B21; }
+.alerta-atencion { background:var(--straw-soft); border-left:4px solid var(--straw); }
+.alerta-atencion .alerta-titulo { color:#7A5510; }
+.alerta-info { background:var(--pasture-soft); border-left:4px solid var(--sage); }
+.alerta-info .alerta-titulo { color:#2D5A3D; }
+.alertas-badge { display:inline-flex; align-items:center; justify-content:center;
+  background:var(--iron); color:#FFF; font-size:11px; font-weight:700;
+  min-width:22px; height:22px; border-radius:999px; padding:0 6px;
+  margin-left:8px; vertical-align:middle; }
 
 /* ---------- catálogo Animales ---------- */
 .ag-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(185px,1fr)); gap:14px; margin:6px 0 20px; }
@@ -618,6 +738,7 @@ COLORES_ETAPA = {
     "VACIA": "#8A6A45",
     "HORRA": "#D6A84F",
     "REPRODUCTOR": "#6B5740",
+    "VENDIDA": "#8C8C8C",
 }
 
 
@@ -798,12 +919,16 @@ def _safe_index(opts: list[str], value: str, default: str) -> int:
 
 
 def _get_etapas_options() -> list[str]:
-    """All known etapa values from DB + new ones."""
+    """Catálogo de estados válidos (check_etapa_actual · DDL 009 / fuentes 2026)."""
     return [
-        "ORDE�O", "PREÑEZ", "VACIA", "HORRA", "REPRODUCTOR",
-        "VENDIDA", "TERNERA", "TERNEROS",
+        "ORDEÑO", "ORDEÑO VACIA", "ORDEÑO EMBRION",
+        "PREÑEZ", "PREÑADA", "VACIA",
+        "HORRA", "VACA HORRA", "VACA VACIA",
         "NOVILLA (H)", "NOVILLA HORRA", "NOVILLA VACIA",
-        "VACA HORRA", "VACA VACIA", "POSIBLE PREÑEZ", "REPRODUCTOR "
+        "NOVILLA EMBRION", "NOVILLA HORRA EMBRION",
+        "POSIBLE PREÑEZ", "PROBLEMA",
+        "REPRODUCTOR", "TORO", "TERNERA", "TERNEROS",
+        "MAMON", "LEVANTE", "MAUTE", "SILVO", "VENDIDA",
     ]
 
 def obtener_animales_ordenados() -> list[str]:
@@ -911,21 +1036,98 @@ def ficha_vaca_html(animal: str) -> str | None:
     )
 
 
+def _ejecutar_venta(animal: str) -> None:
+    """Marca un animal como vendido: etapa VENDIDA + fecha_venta + sale del lote."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE animales "
+                "SET etapa_actual = 'VENDIDA', fecha_venta = %s, id_lote_actual = NULL "
+                "WHERE numero_visible = %s",
+                (date.today(), animal),
+            )
+            if cur.rowcount == 0:
+                st.error(f"No se encontró el animal {animal}")
+                return
+        conn.commit()
+        leer_vista.clear()
+        datos_catalogo.clear()
+        st.success(f"Vaca {animal} vendida correctamente. Ya no aparece en el hato.")
+        st.rerun()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error al registrar la venta: {e}")
+    finally:
+        conn.close()
+
+
+@st.dialog("Vender vaca")
+def dlg_vender(animal: str) -> None:
+    st.subheader(f"Vaca N.º {animal}")
+    st.write("¿Estás seguro de que quieres marcar esta vaca como vendida?")
+    st.caption("Si confirmas, la vaca desaparece del catálogo y de todas las vistas. "
+               "Podrás revertirlo después desde la ficha.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Sí, vender", type="primary", use_container_width=True):
+            _ejecutar_venta(animal)
+    with col2:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
+
+
+@st.dialog("Reactivar animal")
+def dlg_reactivar(animal: str) -> None:
+    opts = [e for e in _get_etapas_options() if e != "VENDIDA"]
+    etapa = st.selectbox(
+        "¿En qué etapa está ahora?",
+        opts,
+        index=_safe_index(opts, "ORDEÑO", opts[0]),
+    )
+    if st.button("Reactivar", type="primary", use_container_width=True):
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE animales SET etapa_actual = %s, fecha_venta = NULL "
+                    "WHERE numero_visible = %s",
+                    (etapa, animal),
+                )
+            conn.commit()
+            leer_vista.clear()
+            datos_catalogo.clear()
+            st.success(f"Vaca {animal} reactivada como {etapa}.")
+            st.rerun()
+        except Exception as e:
+            conn.rollback()
+            st.error(f"Error al reactivar: {e}")
+        finally:
+            conn.close()
+
+
 def mostrar_ficha(animal: str) -> None:
     """Muestra la ficha del animal con botones nativos de Streamlit."""
     html = ficha_vaca_html(animal)
     if html:
         st.markdown(html, unsafe_allow_html=True)
         components.html(LIGHTBOX_JS, height=0)
-    
-    # Botones nativos de Streamlit (fuera del HTML)
-    c1, c2 = st.columns([1, 1])
-    with c1:
+
+    d = datos_ficha(animal)
+    vendida = d["etapa"] == "VENDIDA"
+
+    # Botones nativos de Streamlit alineados al cuerpo de la ficha (760px)
+    st.markdown('<div class="ficha-acciones">', unsafe_allow_html=True)
+    if not vendida:
         if st.button("✏️ Editar", key=f"edit_{animal}", use_container_width=True):
             st.query_params.update({"vaca": animal, "edit": "1"})
             st.rerun()
-    with c2:
-        st.link_button("⬅️ Volver al catálogo", url="?page=animales")
+    if st.button("💶 " + ("Reactivar" if vendida else "Vender esta vaca"),
+                 key=f"venta_{animal}", use_container_width=True):
+        dlg_vender(animal) if not vendida else dlg_reactivar(animal)
+    st.link_button("⬅️ Volver al catálogo", url="?page=animales",
+                   use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- UPDATE handlers ---
 def manejar_edicion_animal() -> None:
@@ -1127,6 +1329,23 @@ def header_html(page: str, lote_q: str, lotes: list[str]) -> str:
     fila3 = ('<span class="ag-lote-tit">Lote</span>'
              + "".join(chips))
 
+    # Bottom nav para mobile (5 items principales)
+    bottom_items = [
+        ("resumen", "Inicio", "grid"),
+        ("animales", "Animales", "animal"),
+        ("dias", "Días", "clock"),
+        ("pesaje", "+ Pesaje", "plus"),
+        ("repro", "+ Repro", "heart"),
+    ]
+    bottom_pills = []
+    for key, etiqueta, icono in bottom_items:
+        activa = " activa" if key == page else ""
+        bottom_pills.append(
+            f'<a class="{activa}" target="_self" href="{_url(key, lote_q)}">'
+            f'{ICONOS[icono]}<span>{etiqueta}</span></a>'
+        )
+    bottom_nav = f'<nav class="ag-bottom-nav">{"".join(bottom_pills)}</nav>'
+
     return (
         '<div class="ag-top">'
         '<div class="ag-fila1">'
@@ -1138,6 +1357,7 @@ def header_html(page: str, lote_q: str, lotes: list[str]) -> str:
         f'<nav class="ag-fila2">{fila2}</nav>'
         f'<div class="ag-fila3">{fila3}</div>'
         "</div>"
+        + bottom_nav
     )
 
 
@@ -1151,47 +1371,83 @@ def alertas(lote: str | None) -> None:
     sin_cubrir = dias[dias["fecha_cubricion"].isna()]
     bajando = peso_reciente[peso_reciente["g_dia"] < 0]
 
+    # Partos próximos (fecha_parto_probable ≤ 7 días)
+    try:
+        repro = filtrar_por_lote(leer_vista(
+            "SELECT numero_visible, nombre_lote, fecha_parto_probable "
+            "FROM v_reproduccion_7_pasos WHERE fecha_parto_probable IS NOT NULL"
+        ), lote)
+        hoy = pd.Timestamp.now().normalize()
+        repro["dias_para_parto"] = (repro["fecha_parto_probable"] - hoy).dt.days
+        proximos = repro[repro["dias_para_parto"].between(0, 7)]
+        proximos = proximos.sort_values("dias_para_parto")
+    except Exception:
+        proximos = pd.DataFrame()
+
     filas = []
-    for r in criticas.itertuples():
+
+    # Partos próximos (urgente)
+    for r in proximos.itertuples():
+        dias_txt = f"en {r.dias_para_parto:.0f} día{'s' if r.dias_para_parto != 1 else ''}" if r.dias_para_parto > 0 else "¡HOY!"
         filas.append(
-            '<div class="libro-row"><div class="libro-bandera hierro"></div>'
-            '<div class="libro-cuerpo">'
-            f'<div class="libro-titulo">{r.dias_abiertos:.0f} días sin preñar</div>'
-            f'<div class="libro-sub">{r.nombre_lote or "Sin lote"} · '
-            f'último parto {fecha_corta(r.fecha_parto)}</div></div>'
-            f'<div class="libro-chapeta">N.º {r.numero_visible}</div></div>'
-        )
-    for r in bajando.itertuples():
-        filas.append(
-            '<div class="libro-row"><div class="libro-bandera paja"></div>'
-            '<div class="libro-cuerpo">'
-            f'<div class="libro-titulo">Pérdida de peso · {abs(r.g_dia):.0f} g/día</div>'
-            f'<div class="libro-sub">{r.nombre_lote or "Sin lote"} · '
-            f'pesaje del {fecha_corta(r.fecha_actual)}</div></div>'
-            f'<div class="libro-chapeta">N.º {r.numero_visible}</div></div>'
-        )
-    for r in sin_cubrir.itertuples():
-        filas.append(
-            '<div class="libro-row"><div class="libro-bandera paja"></div>'
-            '<div class="libro-cuerpo">'
-            '<div class="libro-titulo">Parió y no hay monta registrada</div>'
-            '<div class="libro-sub">Si ya se sirvió, falta anotarlo</div></div>'
-            f'<div class="libro-chapeta">N.º {r.numero_visible}</div></div>'
+            '<div class="alerta alerta-urgente">'
+            '<div class="alerta-icono">🐄</div>'
+            '<div class="alerta-cuerpo">'
+            f'<div class="alerta-titulo">Parto {dias_txt}</div>'
+            f'<div class="alerta-sub">{r.nombre_lote or "Sin lote"} · '
+            f'parto esperado {fecha_corta(r.fecha_parto_probable)}</div></div>'
+            f'<div class="alerta-chapeta">N.º {r.numero_visible}</div></div>'
         )
 
+    # Días abiertos altos
+    for r in criticas.itertuples():
+        filas.append(
+            '<div class="alerta alerta-atencion">'
+            '<div class="alerta-icono">⚠️</div>'
+            '<div class="alerta-cuerpo">'
+            f'<div class="alerta-titulo">{r.dias_abiertos:.0f} días sin preñar</div>'
+            f'<div class="alerta-sub">{r.nombre_lote or "Sin lote"} · '
+            f'último parto {fecha_corta(r.fecha_parto)}</div></div>'
+            f'<div class="alerta-chapeta">N.º {r.numero_visible}</div></div>'
+        )
+
+    # Peso bajando
+    for r in bajando.itertuples():
+        filas.append(
+            '<div class="alerta alerta-info">'
+            '<div class="alerta-icono">📉</div>'
+            '<div class="alerta-cuerpo">'
+            f'<div class="alerta-titulo">Bajando peso · {abs(r.g_dia):.0f} g/día</div>'
+            f'<div class="alerta-sub">{r.nombre_lote or "Sin lote"} · '
+            f'pesaje del {fecha_corta(r.fecha_actual)}</div></div>'
+            f'<div class="alerta-chapeta">N.º {r.numero_visible}</div></div>'
+        )
+
+    # Parió sin monta
+    for r in sin_cubrir.itertuples():
+        filas.append(
+            '<div class="alerta alerta-info">'
+            '<div class="alerta-icono">🔍</div>'
+            '<div class="alerta-cuerpo">'
+            '<div class="alerta-titulo">Parió sin monta registrada</div>'
+            '<div class="alerta-sub">Si ya se sirvió, falta anotarlo</div></div>'
+            f'<div class="alerta-chapeta">N.º {r.numero_visible}</div></div>'
+        )
+
+    total = len(filas)
     if filas:
         st.markdown(
             '<div class="tag tarjeta"><div class="tarjeta-titulo">'
-            "Qué requiere atención</div>"
-            '<div class="tarjeta-nota">Ordenado de más a menos urgente.</div>'
+            f'Alertas del hato <span class="alertas-badge">{total}</span></div>'
+            '<div class="tarjeta-nota">Lo que necesita atención ahora.</div>'
             + "".join(filas) + "</div>",
             unsafe_allow_html=True,
         )
     else:
         st.markdown('<div class="tag tarjeta"><div class="tarjeta-titulo">'
-                    "Qué requiere atención</div>"
-                    '<div class="tarjeta-nota">Todo en orden: no hay alertas '
-                    "para este filtro.</div></div>", unsafe_allow_html=True)
+                    "Todo tranquilo</div>"
+                    '<div class="tarjeta-nota">No hay alertas para este filtro. '
+                    "Así se trabaja.</div></div>", unsafe_allow_html=True)
 
     if not criticas.empty:
         with st.expander(f"Ver tabla de las {len(criticas)} vacas críticas"):
@@ -1734,8 +1990,8 @@ def pagina_nueva_vaca(lote: str | None) -> None:
         with col1:
             numero = st.text_input("Número visible (chapeta) *", placeholder="Ej. 10131", key="nv_numero")
             nombre = st.text_input("Nombre", key="nv_nombre")
-            etapa = st.selectbox("Estado *", _get_etapas_options(),
-                                 index=_safe_index(_get_etapas_options(), "TERNERA"), key="nv_etapa")
+            etapa = st.selectbox("Estado *", etapas_opts,
+                                 index=_safe_index(etapas_opts, "TERNERA", "TERNERA"), key="nv_etapa")
             sexo = st.selectbox("Sexo *", ["F", "M"], key="nv_sexo")
             fecha_nac = st.date_input("Fecha de nacimiento", key="nv_fecha_nac")
         with col2:
@@ -1814,15 +2070,18 @@ def pagina_animales(lote: str | None) -> None:
     vaca_sel = qp.get("vaca")
     edit_mode = qp.get("edit") == "1"
 
-    df = datos_catalogo()
-    if lote:
-        df = df[df["nombre_lote"] == lote]
-
     # Filtros
-    col_f1, col_f2 = st.columns([2, 1])
+    col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
     with col_f1:
         busqueda = st.text_input("Buscar por número", placeholder="Ej. 1013", key="busca_animal")
     with col_f2:
+        mostrar_vendidas = st.checkbox(
+            "Mostrar vendidas", value=False, key="ver_vendidas",
+            help="Incluye los animales marcados como VENDIDA (solo histórico).")
+        df = datos_catalogo(mostrar_vendidas)
+        if lote:
+            df = df[df["nombre_lote"] == lote]
+    with col_f3:
         estados = ["Todos"] + sorted(df["etapa_actual"].dropna().unique().tolist())
         estado_sel = st.selectbox("Estado", estados, key="filtro_estado")
 

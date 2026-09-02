@@ -89,12 +89,12 @@ def test_ca05_resumen_hato_cuadra_con_animales(conn):
 
 
 def test_ca06_conteos_fuente_unica(conn):
-    """Baseline post-migración SPEC-007 (fuente única)."""
-    assert _fetch(conn, "SELECT COUNT(*) FROM animales")[0][0] == 51
-    assert _fetch(conn, "SELECT COUNT(*) FROM pesajes")[0][0] == 334
+    """Baseline post-sincronización SPEC-009 (últimos 3 archivos)."""
+    assert _fetch(conn, "SELECT COUNT(*) FROM animales")[0][0] == 86
+    assert _fetch(conn, "SELECT COUNT(*) FROM pesajes")[0][0] == 731
     assert _fetch(conn, "SELECT COUNT(*) FROM produccion_lechera")[0][0] == 1428
-    assert _fetch(conn, "SELECT COUNT(*) FROM eventos_reproductivos")[0][0] == 86
-    assert _fetch(conn, "SELECT COUNT(*) FROM notas_vaca")[0][0] == 3
-    assert _fetch(conn, "SELECT COUNT(*) FROM hitos_reproductivos")[0][0] == 0
-    assert _fetch(conn, "SELECT COUNT(*) FROM eventos_sanitarios")[0][0] == 238
+    assert _fetch(conn, "SELECT COUNT(*) FROM eventos_reproductivos")[0][0] == 139
+    assert _fetch(conn, "SELECT COUNT(*) FROM notas_vaca")[0][0] == 0
+    assert _fetch(conn, "SELECT COUNT(*) FROM hitos_reproductivos")[0][0] == 10
+    assert _fetch(conn, "SELECT COUNT(*) FROM eventos_sanitarios")[0][0] == 0
     assert _fetch(conn, "SELECT COUNT(*) FROM etl_cuarentena")[0][0] == 0

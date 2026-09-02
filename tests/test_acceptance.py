@@ -72,8 +72,8 @@ def test_ca04_resultado_en_catalogo_cerrado():
 
 
 def test_ca05_hojas_pesaje_corresponden_a_animales_con_lote():
-    """50 animales en lotes Ordeño/Levante/Silvo/Mamon-M (fuente única migración)."""
-    esperado = 50
+    """Animales en lotes Ordeño/Levante/Silvo/Mamon-M (fuente única migración + SPEC-009)."""
+    esperado = 76
     rows = fetch_all(
         """
         SELECT count(*) FROM animales a
@@ -86,14 +86,13 @@ def test_ca05_hojas_pesaje_corresponden_a_animales_con_lote():
 
 
 def test_ca07_idempotencia_conteos_estables():
+    """Re-ejecutar el sincronizador SPEC-009 no altera los conteos (idempotente)."""
+    sync = (Path(__file__).resolve().parent.parent / "scripts" / "sincronizar_2026.py")
     tablas = ["animales", "hitos_reproductivos", "eventos_sanitarios", "etl_cuarentena"]
     conteos_1 = {t: fetch_all(f"SELECT count(*) FROM {t}")[0][0] for t in tablas}
 
     import subprocess
-    result = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "run_ingest.py")],
-        capture_output=True, text=True,
-    )
+    result = subprocess.run([sys.executable, str(sync)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
     conteos_2 = {t: fetch_all(f"SELECT count(*) FROM {t}")[0][0] for t in tablas}
@@ -101,12 +100,12 @@ def test_ca07_idempotencia_conteos_estables():
 
 
 def test_ca08_conteos_baseline_fuente_unica():
-    """Valida conteos actuales post-migración SPEC-007 (fuente única)."""
-    assert fetch_all("SELECT count(*) FROM animales")[0][0] == 51
-    assert fetch_all("SELECT count(*) FROM pesajes")[0][0] == 334
+    """Valida conteos post-sincronización SPEC-009 (últimos 3 archivos)."""
+    assert fetch_all("SELECT count(*) FROM animales")[0][0] == 86
+    assert fetch_all("SELECT count(*) FROM pesajes")[0][0] == 731
     assert fetch_all("SELECT count(*) FROM produccion_lechera")[0][0] == 1428
-    assert fetch_all("SELECT count(*) FROM eventos_reproductivos")[0][0] == 86
-    assert fetch_all("SELECT count(*) FROM notas_vaca")[0][0] == 3
-    assert fetch_all("SELECT count(*) FROM hitos_reproductivos")[0][0] == 0
-    assert fetch_all("SELECT count(*) FROM eventos_sanitarios")[0][0] == 238
+    assert fetch_all("SELECT count(*) FROM eventos_reproductivos")[0][0] == 139
+    assert fetch_all("SELECT count(*) FROM notas_vaca")[0][0] == 0
+    assert fetch_all("SELECT count(*) FROM hitos_reproductivos")[0][0] == 10
+    assert fetch_all("SELECT count(*) FROM eventos_sanitarios")[0][0] == 0
     assert fetch_all("SELECT count(*) FROM etl_cuarentena")[0][0] == 0
