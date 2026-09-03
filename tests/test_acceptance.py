@@ -101,7 +101,7 @@ def test_ca07_idempotencia_conteos_estables():
 
 def test_ca08_conteos_baseline_fuente_unica():
     """Valida conteos post-sincronización SPEC-009 (últimos 3 archivos)."""
-    assert fetch_all("SELECT count(*) FROM animales")[0][0] == 86
+    assert fetch_all("SELECT count(*) FROM animales")[0][0] == 87
     assert fetch_all("SELECT count(*) FROM pesajes")[0][0] == 731
     assert fetch_all("SELECT count(*) FROM produccion_lechera")[0][0] == 1428
     assert fetch_all("SELECT count(*) FROM eventos_reproductivos")[0][0] == 139

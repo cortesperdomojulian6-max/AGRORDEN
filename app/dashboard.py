@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import io
 import sys
+from datetime import date
 from html import escape as _html_esc
 from pathlib import Path
 from urllib.parse import urlencode
@@ -888,11 +889,12 @@ def datos_ficha(animal: str) -> dict:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT etapa_actual FROM animales WHERE numero_visible = %s",
+                "SELECT etapa_actual, foto_principal FROM animales WHERE numero_visible = %s",
                 (animal,),
             )
             fila = cur.fetchone()
             etapa = fila[0] if fila else None
+            foto_db = fila[1] if fila else None
 
             cur.execute(
                 "SELECT COUNT(*) FROM eventos_reproductivos er "
@@ -952,6 +954,7 @@ def datos_ficha(animal: str) -> dict:
         "pico_litros": pico_litros, "pico_fecha": pico_fecha,
         "prom_litros": prom_litros, "peso_actual": peso_actual,
         "g_dia": g_dia, "num_partos": num_partos, "notas": notas,
+        "foto_db": foto_db,
     }
 
 
@@ -999,7 +1002,7 @@ def obtener_animales_ordenados() -> list[str]:
 def ficha_vaca_html(animal: str) -> str | None:
     fotos = fotos_de(animal)
     d = datos_ficha(animal)
-    if not fotos and d["etapa"] is None:
+    if not fotos and d["etapa"] is None and not d.get("foto_db"):
         return None
 
     def fstat(lbl: str, val: str) -> str:
@@ -1049,11 +1052,6 @@ def ficha_vaca_html(animal: str) -> str | None:
             f'<div class="aviso-ficha nota"><strong>Anotación de campo:</strong> '
             f"{_html_esc(nota)}</div>"
         )
-    for nota in d["notas"][:2]:
-        avisos.append(
-            f'<div class="aviso-ficha nota"><strong>Anotación de campo:</strong> '
-            f"{nota}</div>"
-        )
     avisos_html = "".join(avisos)
     bloque_avisos = (
         '<div class="ficha-avisos">' + avisos_html + "</div>" if avisos_html else ""
@@ -1073,6 +1071,11 @@ def ficha_vaca_html(animal: str) -> str | None:
                 f'<img class="ficha-mini vaca-foto" alt="Segunda foto de {animal}" '
                 f'src="data:image/jpeg;base64,{b64_2}">'
             )
+    elif d.get("foto_db"):
+        foto_principal = (
+            f'<img class="principal vaca-foto" alt="Foto de la vaca {animal}" '
+            f'src="data:image/jpeg;base64,{d["foto_db"]}">'
+        )
 
     lote_txt = f"Lote {_html_esc(d['lote'])}" if d["lote"] else "AGRORDEN"
     return (
@@ -1167,6 +1170,36 @@ def dlg_reactivar(animal: str) -> None:
             conn.close()
 
 
+@st.dialog("Eliminar animal")
+def dlg_eliminar(animal: str) -> None:
+    st.subheader(f"Eliminar vaca N.º {animal}")
+    st.warning("Esta acción no se puede deshacer. Se eliminará el animal y todos sus datos asociados (pesajes, producción, eventos).")
+    st.caption("Si solo quieres sacarla del hato, usa 'Vender esta vaca' en su lugar.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Sí, eliminar", type="primary", use_container_width=True):
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM animales WHERE numero_visible = %s", (animal,))
+                    if cur.rowcount == 0:
+                        st.error(f"No se encontró el animal {animal}")
+                        return
+                conn.commit()
+                leer_vista.clear()
+                datos_catalogo.clear()
+                st.success(f"Vaca {animal} eliminada correctamente.")
+                st.rerun()
+            except Exception as e:
+                conn.rollback()
+                st.error(f"Error al eliminar: {e}")
+            finally:
+                conn.close()
+    with col2:
+        if st.button("Cancelar", use_container_width=True):
+            st.rerun()
+
+
 def mostrar_ficha(animal: str) -> None:
     """Muestra la ficha del animal con botones nativos de Streamlit."""
     html = ficha_vaca_html(animal)
@@ -1177,6 +1210,44 @@ def mostrar_ficha(animal: str) -> None:
     d = datos_ficha(animal)
     vendida = d["etapa"] == "VENDIDA"
 
+    # --- Gráfica de peso ---
+    peso = leer_vista(V_PESO)
+    datos_peso = peso[peso["numero_visible"] == animal].sort_values("fecha_actual")
+    if not datos_peso.empty:
+        st.markdown('<h4 style="font-family:\'Fraunces\',Georgia,serif;font-size:17px;'
+                    'margin:16px 0 6px;">Evolución de peso</h4>',
+                    unsafe_allow_html=True)
+        fig_peso = px.line(
+            datos_peso, x="fecha_actual", y="peso_actual", markers=True,
+            labels={"fecha_actual": "Fecha", "peso_actual": "Peso (kg)"},
+        )
+        fig_peso.update_traces(line_color="#A34A21", marker_color="#A34A21",
+                               hovertemplate="Peso: %{y:.0f} kg<extra></extra>")
+        estilizar(fig_peso, alto=300)
+        st.plotly_chart(fig_peso, use_container_width=True,
+                        config={"displayModeBar": False})
+
+    # --- Gráfica de producción ---
+    prod = leer_vista(V_PROD)
+    datos_prod = prod[prod["numero_visible"] == animal]
+    if not datos_prod.empty:
+        st.markdown('<h4 style="font-family:\'Fraunces\',Georgia,serif;font-size:17px;'
+                    'margin:16px 0 6px;">Curva de lactancia</h4>',
+                    unsafe_allow_html=True)
+        fig_prod = px.line(
+            datos_prod, x="fecha_real", y="litros", markers=True,
+            labels={"fecha_real": "Fecha", "litros": "Litros/día"},
+        )
+        promedio = datos_prod["litros"].mean()
+        fig_prod.update_traces(line_color="#22402C", marker_color="#22402C",
+                               hovertemplate="Leche: %{y:.1f} L<extra></extra>")
+        fig_prod.add_hline(y=promedio, line_dash="dash", line_color="#A34A21",
+                           annotation_text=f"Promedio: {promedio:.1f} L",
+                           annotation_position="top left")
+        estilizar(fig_prod, alto=300)
+        st.plotly_chart(fig_prod, use_container_width=True,
+                        config={"displayModeBar": False})
+
     # Botones nativos de Streamlit alineados al cuerpo de la ficha (760px)
     st.markdown('<div class="ficha-acciones">', unsafe_allow_html=True)
     if not vendida:
@@ -1186,6 +1257,8 @@ def mostrar_ficha(animal: str) -> None:
     if st.button("💶 " + ("Reactivar" if vendida else "Vender esta vaca"),
                  key=f"venta_{animal}", use_container_width=True):
         dlg_vender(animal) if not vendida else dlg_reactivar(animal)
+    if st.button("🗑️ Eliminar", key=f"del_{animal}", use_container_width=True):
+        dlg_eliminar(animal)
     st.link_button("⬅️ Volver al catálogo", url="?page=animales",
                    use_container_width=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -2134,7 +2207,7 @@ def pagina_animales(lote: str | None) -> None:
     # Filtros
     col_f1, col_f2, col_f3 = st.columns([2, 1, 1])
     with col_f1:
-        busqueda = st.text_input("Buscar por número", placeholder="Ej. 1013", key="busca_animal")
+        busqueda = st.text_input("Buscar por número o nombre", placeholder="Ej. 1013 o Julia", key="busca_animal")
     with col_f2:
         mostrar_vendidas = st.checkbox(
             "Mostrar vendidas", value=False, key="ver_vendidas",
@@ -2147,7 +2220,9 @@ def pagina_animales(lote: str | None) -> None:
         estado_sel = st.selectbox("Estado", estados, key="filtro_estado")
 
     if busqueda:
-        df = df[df["numero_visible"].astype(str).str.contains(busqueda)]
+        mask_num = df["numero_visible"].astype(str).str.contains(busqueda, case=False)
+        mask_nom = df["nombre"].fillna("").str.contains(busqueda, case=False)
+        df = df[mask_num | mask_nom]
     if estado_sel != "Todos":
         df = df[df["etapa_actual"] == estado_sel]
 
