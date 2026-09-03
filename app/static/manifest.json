@@ -1,0 +1,27 @@
+{
+  "name": "AGRORDEN · Orden del hato",
+  "short_name": "AGRORDEN",
+  "description": "ERP Ganadero — gestión de hato, reproducción, producción y alertas",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F3EA",
+  "theme_color": "#245C45",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/static/logoagro.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/logoagro.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["business", "utilities"],
+  "lang": "es",
+  "dir": "ltr"
+}

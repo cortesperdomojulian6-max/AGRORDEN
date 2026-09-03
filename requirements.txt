@@ -1,8 +1,16 @@
-# AGRORDEN · ERP Ganadero — Dependencias Python (ETL y pruebas)
+# AGRORDEN · ERP Ganadero — Dependencias Python
 # Instalación: python -m pip install -r requirements.txt
 
+# --- Dashboard ---
+streamlit>=1.32.0
+plotly>=5.18.0
+Pillow>=10.0.0
+
+# --- ETL ---
 pandas==3.0.5
 openpyxl==3.1.5
 python-dotenv==1.2.1
 psycopg2-binary==2.9.12
+
+# --- Testing ---
 pytest==9.1.1
