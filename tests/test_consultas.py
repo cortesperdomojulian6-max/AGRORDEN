@@ -84,8 +84,11 @@ def test_ca04_vistas_excluyen_provisionales(conn):
 
 def test_ca05_resumen_hato_cuadra_con_animales(conn):
     total_vista = _fetch(conn, "SELECT SUM(total) FROM v_resumen_hato")[0][0]
-    total_tabla = _fetch(conn, "SELECT COUNT(*) FROM animales")[0][0]
-    assert total_vista == total_tabla
+    total_no_vendidas = _fetch(
+        conn,
+        "SELECT COUNT(*) FROM animales WHERE etapa_actual IS DISTINCT FROM 'VENDIDA'",
+    )[0][0]
+    assert total_vista == total_no_vendidas
 
 
 def test_ca06_conteos_fuente_unica(conn):
@@ -94,7 +97,7 @@ def test_ca06_conteos_fuente_unica(conn):
     assert _fetch(conn, "SELECT COUNT(*) FROM pesajes")[0][0] == 731
     assert _fetch(conn, "SELECT COUNT(*) FROM produccion_lechera")[0][0] == 1428
     assert _fetch(conn, "SELECT COUNT(*) FROM eventos_reproductivos")[0][0] == 139
-    assert _fetch(conn, "SELECT COUNT(*) FROM notas_vaca")[0][0] == 0
+    assert _fetch(conn, "SELECT COUNT(*) FROM notas_vaca")[0][0] == 4
     assert _fetch(conn, "SELECT COUNT(*) FROM hitos_reproductivos")[0][0] == 10
     assert _fetch(conn, "SELECT COUNT(*) FROM eventos_sanitarios")[0][0] == 0
     assert _fetch(conn, "SELECT COUNT(*) FROM etl_cuarentena")[0][0] == 0

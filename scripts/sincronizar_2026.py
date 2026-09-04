@@ -445,7 +445,16 @@ def main() -> int:
                 updated += 1
 
     # --- eventos reproductivos: reconstruir ---
+    # Preservar terneros manuales antes de borrar eventos
     with conn.cursor() as cur:
+        cur.execute("""
+            SELECT t.id_ternero, t.id_parto, t.sexo, t.peso_kg, t.vivo, t.observaciones,
+                   a.numero_visible, er.fecha_evento
+            FROM terneros t
+            JOIN eventos_reproductivos er ON er.id_evento = t.id_parto
+            JOIN animales a ON a.id_interno = er.id_animal
+        """)
+        terneros_backup = cur.fetchall()
         cur.execute("DELETE FROM eventos_reproductivos")
     seen = set()
     ev_rows = []
@@ -467,6 +476,27 @@ def main() -> int:
                 "INSERT INTO eventos_reproductivos "
                 "(id_animal, id_tipo_evento, fecha_evento, archivo_origen, hoja_origen) VALUES %s",
                 ev_rows)
+
+    # Restaurar terneros preservados (re-asociar con nuevos IDs de parto)
+    if terneros_backup:
+        with conn.cursor() as cur:
+            for (old_id_ternero, old_id_parto, sexo, peso, vivo, obs, num_animal, fecha_parto) in terneros_backup:
+                cur.execute(
+                    "SELECT id_evento FROM eventos_reproductivos er "
+                    "JOIN cat_eventos_reproductivos c ON c.id_tipo_evento = er.id_tipo_evento "
+                    "JOIN animales a ON a.id_interno = er.id_animal "
+                    "WHERE c.nombre_tipo = 'Parto' AND a.numero_visible = %s "
+                    "AND er.fecha_evento = %s",
+                    (num_animal, fecha_parto),
+                )
+                row = cur.fetchone()
+                if row:
+                    cur.execute(
+                        "INSERT INTO terneros (id_parto, sexo, peso_kg, vivo, observaciones) "
+                        "VALUES (%s, %s, %s, %s, %s) "
+                        "ON CONFLICT DO NOTHING",
+                        (row[0], sexo, peso, vivo, obs),
+                    )
 
     # --- hitos de diagnóstico (preñez) del panel ---
     with conn.cursor() as cur:

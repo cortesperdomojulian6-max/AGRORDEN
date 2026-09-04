@@ -883,18 +883,22 @@ def fecha_corta(valor) -> str:
     return pd.Timestamp(valor).strftime("%d/%m/%y")
 
 
-@st.cache_data(ttl=300)
 def datos_ficha(animal: str) -> dict:
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT etapa_actual, foto_principal FROM animales WHERE numero_visible = %s",
+                "SELECT etapa_actual, foto_principal, nombre, sexo, "
+                "fecha_nacimiento, raza, caracteristicas, id_madre, "
+                "id_lote_actual "
+                "FROM animales WHERE numero_visible = %s",
                 (animal,),
             )
             fila = cur.fetchone()
-            etapa = fila[0] if fila else None
-            foto_db = fila[1] if fila else None
+            if fila:
+                etapa, foto_db, nombre, sexo, fecha_nac, raza, caract, id_madre, id_lote = fila
+            else:
+                etapa = foto_db = nombre = sexo = fecha_nac = raza = caract = id_madre = id_lote = None
 
             cur.execute(
                 "SELECT COUNT(*) FROM eventos_reproductivos er "
@@ -947,14 +951,33 @@ def datos_ficha(animal: str) -> dict:
             )
             fila = cur.fetchone()
             peso_actual, g_dia = (fila if fila else (None, None))
+
+            # Obtener nombre del lote
+            nombre_lote = None
+            if id_lote:
+                cur.execute("SELECT nombre_lote FROM lotes WHERE id_lote = %s", (id_lote,))
+                row = cur.fetchone()
+                if row:
+                    nombre_lote = row[0]
+
+            # Obtener numero_visible de la madre
+            madre_numero = None
+            if id_madre:
+                cur.execute("SELECT numero_visible FROM animales WHERE id_interno = %s", (id_madre,))
+                row = cur.fetchone()
+                if row:
+                    madre_numero = row[0]
     finally:
         conn.close()
     return {
-        "etapa": etapa, "parto": parto, "abiertos": abiertos, "lote": lote,
+        "etapa": etapa, "parto": parto, "abiertos": abiertos, "lote": nombre_lote,
         "pico_litros": pico_litros, "pico_fecha": pico_fecha,
         "prom_litros": prom_litros, "peso_actual": peso_actual,
         "g_dia": g_dia, "num_partos": num_partos, "notas": notas,
         "foto_db": foto_db,
+        "nombre": nombre, "sexo": sexo, "fecha_nacimiento": fecha_nac,
+        "raza": raza, "caracteristicas": caract, "id_madre": madre_numero,
+        "id_lote": id_lote,
     }
 
 
@@ -1210,42 +1233,315 @@ def mostrar_ficha(animal: str) -> None:
     d = datos_ficha(animal)
     vendida = d["etapa"] == "VENDIDA"
 
+    # --- Historial de Partos ---
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT fecha_parto, numero_parto, ternero_sexo, ternero_peso, "
+                "ternero_vivo, ternero_obs, id_parto, dias_abiertos, "
+                "fecha_proximo_parto "
+                "FROM v_historial_partos WHERE numero_visible = %s "
+                "ORDER BY fecha_parto",
+                (animal,),
+            )
+            partos = cur.fetchall()
+    finally:
+        conn.close()
+
+    from datetime import date as _date
+
+    n_partos = len(partos) if partos else 0
+    st.markdown(
+        f'<div style="margin:24px 0 12px;padding:12px 16px;background:#f8f6f2;'
+        f'border-radius:10px;border-left:4px solid #4A6741;">'
+        f'<span style="font-family:\'Fraunces\',Georgia,serif;font-size:18px;'
+        f'color:#22402C;">📋 Historial de Partos</span>'
+        f'<span style="float:right;font-size:14px;color:#6b7280;">'
+        f'{n_partos} registro{"s" if n_partos != 1 else ""}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    if partos:
+        for i, p in enumerate(reversed(partos)):
+            (fparto, numparto, sexo, peso, vivo, obs, idp, dias_ab, fproximo) = p
+            nums = {1: "1°", 2: "2°", 3: "3°", 4: "4°", 5: "5°"}
+            label_num = nums.get(numparto, f"{numparto}°") if numparto else f"#{i+1}"
+            vivo_txt = "Vivo" if vivo else "Mortinato"
+            vivo_icon = "🟢" if vivo else "🔴"
+            sexo_txt = "Macho" if sexo == "M" else "Hembra" if sexo == "F" else "—"
+            peso_txt = f"{peso:.1f} kg" if peso else "Sin registrar"
+            dias_txt = f"{dias_ab} días" if dias_ab is not None else "—"
+            if fproximo:
+                lact_dias = (fproximo - fparto).days
+                lact_txt = f"{lact_dias} días"
+            elif not vendida:
+                lact_dias = (_date.today() - fparto).days
+                lact_txt = f"{lact_dias} días (en curso)"
+            else:
+                lact_txt = "—"
+
+            with st.expander(
+                f"{label_num} Parto — {fparto.strftime('%d/%m/%Y')} | "
+                f"Ternero: {sexo_txt} {vivo_icon} | Lactancia: {lact_txt}",
+                expanded=(i == len(partos) - 1),
+            ):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("🍼 Ternero", f"{sexo_txt}", help=f"Peso: {peso_txt}")
+                c2.metric("📅 Días abiertos", dias_txt)
+                c3.metric("🥛 Lactancia", lact_txt)
+                if peso:
+                    st.caption(f"Peso al nacer: {peso_txt}")
+                if obs:
+                    st.caption(f"Nota: {obs}")
+
+                if sexo is None:
+                    st.markdown("---")
+                    st.markdown("**🍼 Registrar ternero:**")
+                    tc1, tc2, tc3 = st.columns(3)
+                    with tc1:
+                        t_sexo = st.selectbox(
+                            "Sexo", ["M", "F"], key=f"t_sexo_{idp}",
+                            format_func=lambda x: "Macho" if x == "M" else "Hembra",
+                        )
+                    with tc2:
+                        t_peso = st.number_input(
+                            "Peso (kg)", min_value=0.0, max_value=100.0,
+                            step=0.5, key=f"t_peso_{idp}",
+                        )
+                    with tc3:
+                        t_vivo = st.checkbox("Vivo al nacer", value=True, key=f"t_vivo_{idp}")
+                    t_obs = st.text_input("Observaciones", key=f"t_obs_{idp}")
+                    if st.button("Guardar ternero", key=f"t_save_{idp}",
+                                 type="primary", use_container_width=True):
+                        conn = get_connection()
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "INSERT INTO terneros "
+                                    "(id_parto, sexo, peso_kg, vivo, observaciones) "
+                                    "VALUES (%s, %s, %s, %s, %s)",
+                                    (idp, t_sexo, t_peso or None, t_vivo,
+                                     t_obs or None),
+                                )
+                            conn.commit()
+                            st.success("Ternero registrado.")
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"Error: {e}")
+                        finally:
+                            conn.close()
+    else:
+        st.info("Sin partos registrados para esta vaca.")
+
+    # Botón registrar nuevo parto + ternero en un solo paso
+    if not vendida:
+        with st.expander("➕ Registrar nuevo parto", expanded=False):
+            st.markdown("**Fecha del parto:**")
+            p_fecha = st.date_input(
+                "Fecha", value=_date.today(),
+                key="nuevo_parto_fecha",
+            )
+            st.markdown("**Datos del ternero:**")
+            tc1, tc2, tc3 = st.columns(3)
+            with tc1:
+                t_sexo = st.selectbox(
+                    "Sexo", ["M", "F"], key="nuevo_t_sexo",
+                    format_func=lambda x: "Macho" if x == "M" else "Hembra",
+                )
+            with tc2:
+                t_peso = st.number_input(
+                    "Peso al nacer (kg)", min_value=0.0, max_value=100.0,
+                    step=0.5, key="nuevo_t_peso",
+                )
+            with tc3:
+                t_vivo = st.checkbox("Vivo al nacer", value=True, key="nuevo_t_vivo")
+            t_obs = st.text_input("Observaciones del ternero", key="nuevo_t_obs")
+            p_nota = st.text_input("Nota del parto (opcional)", key="nuevo_parto_nota")
+
+            if st.button("Registrar parto y ternero", key="btn_reg_parto",
+                         type="primary", use_container_width=True):
+                conn = get_connection()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT id_tipo_evento FROM cat_eventos_reproductivos "
+                            "WHERE nombre_tipo = 'Parto'"
+                        )
+                        id_tipo = cur.fetchone()[0]
+                        cur.execute(
+                            "SELECT id_interno FROM animales WHERE numero_visible = %s",
+                            (animal,),
+                        )
+                        id_animal = cur.fetchone()[0]
+                        cur.execute(
+                            "INSERT INTO eventos_reproductivos "
+                            "(id_animal, id_tipo_evento, fecha_evento, "
+                            "archivo_origen, hoja_origen) "
+                            "VALUES (%s, %s, %s, 'MANUAL', 'Dashboard') "
+                            "RETURNING id_evento",
+                            (id_animal, id_tipo, p_fecha),
+                        )
+                        id_parto = cur.fetchone()[0]
+                        cur.execute(
+                            "INSERT INTO terneros "
+                            "(id_parto, sexo, peso_kg, vivo, observaciones) "
+                            "VALUES (%s, %s, %s, %s, %s)",
+                            (id_parto, t_sexo, t_peso or None, t_vivo,
+                             t_obs or None),
+                        )
+                        if p_nota:
+                            cur.execute(
+                                "INSERT INTO notas_vaca (id_animal, observacion) "
+                                "VALUES (%s, %s)",
+                                (id_animal, p_nota),
+                            )
+                    conn.commit()
+                    st.success(
+                        f"Parto del {p_fecha.strftime('%d/%m/%Y')} registrado "
+                        f"con ternero {('Macho' if t_sexo == 'M' else 'Hembra')}."
+                    )
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Error: {e}")
+                finally:
+                    conn.close()
+
+    # --- Gráfica de producción por parto (fuera del historial) ---
+    if partos:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                ids_parto = [str(p[6]) for p in partos]
+                if ids_parto:
+                    cur.execute(
+                        "SELECT id_parto, fecha_produccion, litros, dias_post_parto "
+                        "FROM v_produccion_por_parto "
+                        "WHERE id_parto::text = ANY(%s) ORDER BY id_parto, fecha_produccion",
+                        (ids_parto,),
+                    )
+                    prod_all = cur.fetchall()
+                else:
+                    prod_all = []
+        finally:
+            conn.close()
+
+        if prod_all:
+            st.markdown(
+                '<div style="margin:20px 0 8px;padding:10px 14px;background:#f0f7f0;'
+                'border-radius:8px;border-left:4px solid #4A6741;">'
+                '<span style="font-family:\'Fraunces\',Georgia,serif;font-size:16px;'
+                'color:#22402C;">📈 Curva de Lactancia por Parto</span></div>',
+                unsafe_allow_html=True,
+            )
+            if len(partos) > 1:
+                tab_labels = []
+                for p in reversed(partos):
+                    nums = {1: "1°", 2: "2°", 3: "3°", 4: "4°", 5: "5°"}
+                    n = nums.get(p[1], f"{p[1]}°") if p[1] else "?"
+                    tab_labels.append(f"{n} Parto — {p[0].strftime('%d/%m/%Y')}")
+                tabs = st.tabs(tab_labels)
+                import pandas as _pd
+                for idx, (tab, p) in enumerate(zip(tabs, reversed(partos))):
+                    idp = p[6]
+                    datos = [r for r in prod_all if r[0] == idp]
+                    with tab:
+                        if datos:
+                            dfp = _pd.DataFrame(datos, columns=["idp", "fecha", "litros", "dia"])
+                            fig_p = px.line(
+                                dfp, x="dia", y="litros", markers=True,
+                                labels={"dia": "Días post-parto", "litros": "Litros/día"},
+                            )
+                            prom = dfp["litros"].mean()
+                            pico = dfp["litros"].max()
+                            fig_p.update_traces(
+                                line_color="#4A6741", marker_color="#4A6741",
+                                line_width=2.5,
+                                hovertemplate="Día %{x}: %{y:.1f} L<extra></extra>",
+                            )
+                            fig_p.add_hline(y=prom, line_dash="dash", line_color="#A34A21",
+                                            line_width=1.5,
+                                            annotation_text=f"Promedio: {prom:.1f} L",
+                                            annotation_position="top left")
+                            fig_p.add_hline(y=pico, line_dash="dot", line_color="#22402C",
+                                            line_width=1,
+                                            annotation_text=f"Pico: {pico:.1f} L",
+                                            annotation_position="top right")
+                            fig_p.update_layout(
+                                height=300,
+                                margin=dict(l=40, r=20, t=10, b=40),
+                                plot_bgcolor="white", paper_bgcolor="white",
+                            )
+                            fig_p.update_xaxes(gridcolor="#e5e7eb")
+                            fig_p.update_yaxes(gridcolor="#e5e7eb")
+                            st.plotly_chart(fig_p, use_container_width=True,
+                                            config={"displayModeBar": False})
+                        else:
+                            st.info("Sin datos de producción para este período.")
+            elif len(partos) == 1:
+                idp = partos[0][6]
+                datos = [r for r in prod_all if r[0] == idp]
+                if datos:
+                    import pandas as _pd
+                    dfp = _pd.DataFrame(datos, columns=["idp", "fecha", "litros", "dia"])
+                    fig_p = px.line(
+                        dfp, x="dia", y="litros", markers=True,
+                        labels={"dia": "Días post-parto", "litros": "Litros/día"},
+                    )
+                    prom = dfp["litros"].mean()
+                    pico = dfp["litros"].max()
+                    fig_p.update_traces(
+                        line_color="#4A6741", marker_color="#4A6741",
+                        line_width=2.5,
+                        hovertemplate="Día %{x}: %{y:.1f} L<extra></extra>",
+                    )
+                    fig_p.add_hline(y=prom, line_dash="dash", line_color="#A34A21",
+                                    line_width=1.5,
+                                    annotation_text=f"Promedio: {prom:.1f} L",
+                                    annotation_position="top left")
+                    fig_p.add_hline(y=pico, line_dash="dot", line_color="#22402C",
+                                    line_width=1,
+                                    annotation_text=f"Pico: {pico:.1f} L",
+                                    annotation_position="top right")
+                    fig_p.update_layout(
+                        height=300,
+                        margin=dict(l=40, r=20, t=10, b=40),
+                        plot_bgcolor="white", paper_bgcolor="white",
+                    )
+                    fig_p.update_xaxes(gridcolor="#e5e7eb")
+                    fig_p.update_yaxes(gridcolor="#e5e7eb")
+                    st.plotly_chart(fig_p, use_container_width=True,
+                                    config={"displayModeBar": False})
+
     # --- Gráfica de peso ---
     peso = leer_vista(V_PESO)
     datos_peso = peso[peso["numero_visible"] == animal].sort_values("fecha_actual")
     if not datos_peso.empty:
-        st.markdown('<h4 style="font-family:\'Fraunces\',Georgia,serif;font-size:17px;'
-                    'margin:16px 0 6px;">Evolución de peso</h4>',
-                    unsafe_allow_html=True)
+        st.markdown(
+            '<div style="margin:20px 0 8px;padding:10px 14px;background:#fdf8f0;'
+            'border-radius:8px;border-left:4px solid #A34A21;">'
+            '<span style="font-family:\'Fraunces\',Georgia,serif;font-size:16px;'
+            'color:#A34A21;">⚖️ Evolución de peso</span></div>',
+            unsafe_allow_html=True,
+        )
         fig_peso = px.line(
             datos_peso, x="fecha_actual", y="peso_actual", markers=True,
             labels={"fecha_actual": "Fecha", "peso_actual": "Peso (kg)"},
         )
-        fig_peso.update_traces(line_color="#A34A21", marker_color="#A34A21",
-                               hovertemplate="Peso: %{y:.0f} kg<extra></extra>")
-        estilizar(fig_peso, alto=300)
-        st.plotly_chart(fig_peso, use_container_width=True,
-                        config={"displayModeBar": False})
-
-    # --- Gráfica de producción ---
-    prod = leer_vista(V_PROD)
-    datos_prod = prod[prod["numero_visible"] == animal]
-    if not datos_prod.empty:
-        st.markdown('<h4 style="font-family:\'Fraunces\',Georgia,serif;font-size:17px;'
-                    'margin:16px 0 6px;">Curva de lactancia</h4>',
-                    unsafe_allow_html=True)
-        fig_prod = px.line(
-            datos_prod, x="fecha_real", y="litros", markers=True,
-            labels={"fecha_real": "Fecha", "litros": "Litros/día"},
+        fig_peso.update_traces(
+            line_color="#A34A21", marker_color="#A34A21", line_width=2.5,
+            hovertemplate="Peso: %{y:.0f} kg<extra></extra>",
         )
-        promedio = datos_prod["litros"].mean()
-        fig_prod.update_traces(line_color="#22402C", marker_color="#22402C",
-                               hovertemplate="Leche: %{y:.1f} L<extra></extra>")
-        fig_prod.add_hline(y=promedio, line_dash="dash", line_color="#A34A21",
-                           annotation_text=f"Promedio: {promedio:.1f} L",
-                           annotation_position="top left")
-        estilizar(fig_prod, alto=300)
-        st.plotly_chart(fig_prod, use_container_width=True,
+        fig_peso.update_layout(
+            height=260,
+            margin=dict(l=40, r=20, t=10, b=40),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+        fig_peso.update_xaxes(gridcolor="#e5e7eb")
+        fig_peso.update_yaxes(gridcolor="#e5e7eb")
+        st.plotly_chart(fig_peso, use_container_width=True,
                         config={"displayModeBar": False})
 
     # Botones nativos de Streamlit alineados al cuerpo de la ficha (760px)
@@ -1264,55 +1560,6 @@ def mostrar_ficha(animal: str) -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- UPDATE handlers ---
-def manejar_edicion_animal() -> None:
-    qp = st.query_params
-    animal = qp.get("vaca")
-    if not animal or qp.get("save") != "1":
-        return
-
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            # Obtener id_lote si se proporcionó
-            id_lote = None
-            lote_nombre = qp.get("nombre_lote", "")
-            if lote_nombre:
-                cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (lote_nombre,))
-                row = cur.fetchone()
-                if row:
-                    id_lote = row[0]
-
-            # Obtener id_madre si se proporcionó
-            id_madre = None
-            id_madre_str = qp.get("id_madre", "")
-            if id_madre_str:
-                cur.execute("SELECT id_interno FROM animales WHERE id_interno = %s", (id_madre_str,))
-                row = cur.fetchone()
-                if row:
-                    id_madre = row[0]
-
-            cur.execute(SQL_UPDATE_ANIMAL, (
-                qp.get("nombre", ""),
-                qp.get("etapa", "ORDEÑO"),
-                id_lote,
-                qp.get("sexo", "F"),
-                qp.get("fecha_nacimiento") or None,
-                qp.get("raza", ""),
-                qp.get("caracteristicas", ""),
-                id_madre,
-                qp.get("foto_principal") or None,
-                animal
-            ))
-        conn.commit()
-        leer_vista.clear()
-        st.success(f"Animal {animal} actualizado correctamente")
-        st.rerun()
-    except Exception as e:
-        conn.rollback()
-        st.error(f"Error al actualizar: {e}")
-    finally:
-        conn.close()
-
 def pagina_editar_animal(lote: str | None) -> None:
     qp = st.query_params
     animal = qp.get("vaca")
@@ -1320,90 +1567,106 @@ def pagina_editar_animal(lote: str | None) -> None:
         st.rerun()
         return
 
-    # Mostrar ficha en modo edición (solo datos, sin botones)
+    # Leer valores actuales de session_state o de la BD
+    d = datos_ficha(animal)
+    
+    # Widgets - usamos session_state para preservar valores entre renders
+    # Si hay valores en session_state (del submit anterior), usarlos; sino los de la BD
+    nn = st.session_state.get(f"edit_nom_{animal}", d.get("nombre") or "")
+    ee = st.session_state.get(f"edit_etapa_{animal}", d.get("etapa") or "ORDEÑO")
+    ss = st.session_state.get(f"edit_sexo_{animal}", d.get("sexo") or "F")
+    fn = st.session_state.get(f"edit_fn_{animal}", d.get("fecha_nacimiento"))
+    rr = st.session_state.get(f"edit_raza_{animal}", d.get("raza") or "")
+    ll = st.session_state.get(f"edit_lote_{animal}", d.get("lote") or "")
+    mm = st.session_state.get(f"edit_madre_{animal}", d.get("id_madre") or "")
+    cc = st.session_state.get(f"edit_caract_{animal}", d.get("caracteristicas") or "")
+    
+    # Mostrar ficha en modo edición
     html = ficha_vaca_html(animal)
     if html:
         st.markdown(html, unsafe_allow_html=True)
         components.html(LIGHTBOX_JS, height=0)
-
-    # Formulario de edición nativo
-    d = datos_ficha(animal)
-    with st.form(f"edit_form_{animal}", clear_on_submit=False):
-        st.markdown("### ✏️ Editar animal")
+    
+    st.markdown("### ✏️ Editar animal")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        nombre = st.text_input("Nombre", value=nn, key=f"edit_nom_{animal}")
+        etapas_opts = _get_etapas_options()
+        etapa = st.selectbox("Estado", etapas_opts,
+                             index=_safe_index(etapas_opts, ee, "ORDEÑO"), key=f"edit_etapa_{animal}")
+        sexo = st.selectbox("Sexo", ["F", "M"], index=_safe_index(["F", "M"], ss, "F"), key=f"edit_sexo_{animal}")
+        fecha_nac = st.date_input("Fecha nacimiento", value=fn, key=f"edit_fn_{animal}")
+    with col2:
+        raza_opts = [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
+        raza = st.selectbox("Raza", raza_opts,
+                            index=_safe_index(raza_opts, rr, ""), key=f"edit_raza_{animal}")
+        lotes_opts = [""] + _get_lotes_options()
+        lote_sel = st.selectbox("Lote", lotes_opts,
+                                index=_safe_index(lotes_opts, ll, ""), key=f"edit_lote_{animal}")
+        madre_opts = [""] + obtener_animales_ordenados()
+        madre = st.selectbox("Madre", madre_opts,
+                             index=_safe_index(madre_opts, mm, ""), key=f"edit_madre_{animal}")
+        caracteristicas = st.text_area("Características", value=cc, key=f"edit_caract_{animal}")
+    
+    # Botón fuera del form - dispara el UPDATE directamente
+    if st.button("Guardar cambios", type="primary", key=f"btn_guardar_{animal}"):
+        # Leer valores actuales de los widgets
+        _nombre = st.session_state.get(f"edit_nom_{animal}", "")
+        _etapa = st.session_state.get(f"edit_etapa_{animal}", "ORDEÑO")
+        _sexo = st.session_state.get(f"edit_sexo_{animal}", "F")
+        _fecha_nac = st.session_state.get(f"edit_fn_{animal}")
+        _raza = st.session_state.get(f"edit_raza_{animal}", "")
+        _lote_sel = st.session_state.get(f"edit_lote_{animal}", "")
+        _madre = st.session_state.get(f"edit_madre_{animal}", "")
+        _caract = st.session_state.get(f"edit_caract_{animal}", "")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.text_input("Nombre", value=d.get("nombre") or "", key=f"edit_nom_{animal}")
-            etapas_opts = _get_etapas_options()
-            etapa = st.selectbox("Estado", etapas_opts,
-                                 index=_safe_index(etapas_opts, d.get("etapa", ""), "ORDEÑO"), key=f"edit_etapa_{animal}")
-            sexo = st.selectbox("Sexo", ["F", "M"], index=_safe_index(["F", "M"], d.get("sexo", "F"), "F"), key=f"edit_sexo_{animal}")
-            fecha_nac = st.date_input("Fecha nacimiento", value=d.get("fecha_nacimiento") or None, key=f"edit_fn_{animal}")
-        with col2:
-            raza_opts = [""] + ["Holstein", "Jersey", "Normanda", "Parda", "Cruzada"]
-            raza = st.selectbox("Raza", raza_opts, index=_safe_index(raza_opts, d.get("raza", ""), ""), key=f"edit_raza_{animal}")
-            lotes_opts = [""] + _get_lotes_options()
-            lote_sel = st.selectbox("Lote", lotes_opts,
-                                   index=_safe_index(lotes_opts, d.get("nombre_lote", "") or "", ""), key=f"edit_lote_{animal}")
-            madre_opts = [""] + obtener_animales_ordenados()
-            madre = st.selectbox("Madre", madre_opts,
-                                 index=_safe_index(madre_opts, d.get("id_madre") or "", ""), key=f"edit_madre_{animal}")
-            caracteristicas = st.text_area("Características", value=d.get("caracteristicas") or "", key=f"edit_caract_{animal}")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            guardar = st.form_submit_button("Guardar cambios", type="primary")
-        with c2:
-            cancelar = st.form_submit_button("Cancelar")
-
-        if guardar:
-            # Actualizar en BD
-            conn = get_connection()
-            try:
-                with conn.cursor() as cur:
-                    # Obtener id_lote si se seleccionó
-                    id_lote = None
-                    if lote_sel:
-                        cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (lote_sel,))
-                        row = cur.fetchone()
-                        if row:
-                            id_lote = row[0]
-
-                    # Obtener id_madre si se seleccionó
-                    id_madre = None
-                    if madre:
-                        cur.execute("SELECT id_interno FROM animales WHERE numero_visible = %s", (madre,))
-                        row = cur.fetchone()
-                        if row:
-                            id_madre = row[0]
-
-                    cur.execute(SQL_UPDATE_ANIMAL, (
-                        d.get("etapa") or "ORDEÑO",  # etapa_actual
-                        id_lote,  # id_lote_actual
-                        sexo,
-                        fecha_nac if fecha_nac else None,
-                        raza if raza else None,
-                        caracteristicas if caracteristicas else None,
-                        id_madre,
-                        None,  # foto_principal - mantener la actual
-                        animal
-                    ))
-                conn.commit()
-                leer_vista.clear()
-                st.success(f"Animal {animal} actualizado correctamente")
-                # Limpiar query params y volver a vista normal
-                st.query_params.clear()
-                st.query_params.update({"page": "animales"})
-                st.rerun()
-            except Exception as e:
-                conn.rollback()
-                st.error(f"Error al actualizar: {e}")
-            finally:
-                conn.close()
-        elif cancelar:
-            st.query_params.clear()
-            st.query_params.update({"page": "animales"})
-            st.rerun()
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                id_lote = None
+                if _lote_sel:
+                    cur.execute("SELECT id_lote FROM lotes WHERE nombre_lote = %s", (_lote_sel,))
+                    row = cur.fetchone()
+                    if row:
+                        id_lote = row[0]
+                
+                id_madre = None
+                if _madre:
+                    cur.execute("SELECT id_interno FROM animales WHERE numero_visible = %s", (_madre,))
+                    row = cur.fetchone()
+                    if row:
+                        id_madre = row[0]
+                
+                cur.execute("SELECT foto_principal FROM animales WHERE numero_visible = %s", (animal,))
+                foto_row = cur.fetchone()
+                foto_actual = foto_row[0] if foto_row else None
+                
+                cur.execute(SQL_UPDATE_ANIMAL, (
+                    _nombre,
+                    _etapa,
+                    id_lote,
+                    _sexo,
+                    _fecha_nac if _fecha_nac else None,
+                    _raza if _raza else None,
+                    _caract if _caract else None,
+                    id_madre,
+                    foto_actual,
+                    animal,
+                ))
+            conn.commit()
+            datos_ficha.clear()
+            st.success(f"Animal {animal} actualizado correctamente")
+        except Exception as e:
+            conn.rollback()
+            st.error(f"Error al actualizar: {e}")
+        finally:
+            conn.close()
+    
+    if st.button("Cancelar", key=f"btn_cancelar_{animal}"):
+        st.query_params.clear()
+        st.query_params.update({"page": "animales"})
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------

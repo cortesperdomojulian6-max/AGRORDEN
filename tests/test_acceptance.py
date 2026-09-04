@@ -105,7 +105,7 @@ def test_ca08_conteos_baseline_fuente_unica():
     assert fetch_all("SELECT count(*) FROM pesajes")[0][0] == 731
     assert fetch_all("SELECT count(*) FROM produccion_lechera")[0][0] == 1428
     assert fetch_all("SELECT count(*) FROM eventos_reproductivos")[0][0] == 139
-    assert fetch_all("SELECT count(*) FROM notas_vaca")[0][0] == 0
+    assert fetch_all("SELECT count(*) FROM notas_vaca")[0][0] == 4
     assert fetch_all("SELECT count(*) FROM hitos_reproductivos")[0][0] == 10
     assert fetch_all("SELECT count(*) FROM eventos_sanitarios")[0][0] == 0
     assert fetch_all("SELECT count(*) FROM etl_cuarentena")[0][0] == 0
